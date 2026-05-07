@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tennis Highlight Editor</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Tennis Highlight Editor</h1>
+    <p class="subtitle">Upload practice footage. AI removes the dead time. You review and export.</p>
+  </header>
+
+  <main>
+    <!-- Phase 0: Library -->
+    <section id="library-section" class="card" hidden>
+      <div class="row-between">
+        <h2>Media Pool</h2>
+        <button id="show-upload-btn">+ Upload another</button>
+      </div>
+      <div class="analysis-start-controls">
+        <label>
+          <span>Algorithm</span>
+          <select id="start-algorithm">
+            <option value="median_frame">Median frame detector</option>
+            <option value="median_court_roi">Court ROI median detector</option>
+            <option value="pose_skeleton_yolo">YOLO pose skeleton</option>
+          </select>
+        </label>
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+          <span>sample_fps <button type="button" class="help-dot" data-help-key="sample_fps" aria-label="Help">?</button></span>
+          <input id="start-sample-fps" type="number" min="0.1" step="0.1" value="2.0" />
+        </label>
+        <label class="start-config" data-algorithms="median_frame median_court_roi">
+          <span>median_bg_samples <button type="button" class="help-dot" data-help-key="median_bg_samples" aria-label="Help">?</button></span>
+          <input id="start-median-bg-samples" type="number" min="1" step="1" value="80" />
+        </label>
+        <label class="start-config" data-algorithms="median_court_roi">
+          <span>court_weight <button type="button" class="help-dot" data-help-key="court_weight" aria-label="Help">?</button></span>
+          <input id="start-court-weight" type="number" min="0" step="0.05" value="1.0" />
+        </label>
+        <label class="start-config" data-algorithms="median_court_roi">
+          <span>outside_weight <button type="button" class="help-dot" data-help-key="outside_weight" aria-label="Help">?</button></span>
+          <input id="start-outside-weight" type="number" min="0" step="0.05" value="0.15" />
+        </label>
+        <label class="start-config" data-algorithms="median_court_roi">
+          <span>near_camera_weight <button type="button" class="help-dot" data-help-key="near_camera_weight" aria-label="Help">?</button></span>
+          <input id="start-near-camera-weight" type="number" min="0" step="0.05" value="0.0" />
+        </label>
+        <label class="start-config" data-algorithms="pose_skeleton_yolo">
+          <span>pose_model <button type="button" class="help-dot" data-help-key="pose_model" aria-label="Help">?</button></span>
+          <input id="start-pose-model" type="text" value="yolo11n-pose.pt" />
+        </label>
+        <label class="start-config" data-algorithms="pose_skeleton_yolo">
+          <span>pose_conf <button type="button" class="help-dot" data-help-key="pose_conf" aria-label="Help">?</button></span>
+          <input id="start-pose-conf" type="number" min="0" max="1" step="0.05" value="0.25" />
+        </label>
+        <label class="start-config" data-algorithms="pose_skeleton_yolo">
+          <span>pose_imgsz <button type="button" class="help-dot" data-help-key="pose_imgsz" aria-label="Help">?</button></span>
+          <input id="start-pose-imgsz" type="number" min="320" step="32" value="640" />
+        </label>
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+          <span>range_start <button type="button" class="help-dot" data-help-key="range_start_s" aria-label="Help">?</button></span>
+          <input id="start-range-start" type="text" value="0:00.0" />
+        </label>
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+          <span>range_end <button type="button" class="help-dot" data-help-key="range_end_s" aria-label="Help">?</button></span>
+          <input id="start-range-end" type="text" value="0:00.0" />
+        </label>
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+          <span>start slider</span>
+          <input id="start-range-start-slider" type="range" min="0" max="0" step="0.5" value="0" />
+        </label>
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+          <span>end slider</span>
+          <input id="start-range-end-slider" type="range" min="0" max="0" step="0.5" value="0" />
+        </label>
+      </div>
+      <table id="videos-table">
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Duration</th>
+            <th>Analyses</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="videos-tbody"></tbody>
+      </table>
+    </section>
+
+    <section id="calibration-section" class="card" hidden>
+      <div class="row-between">
+        <h2>Court Calibration</h2>
+        <button id="close-calibration-btn">Done</button>
+      </div>
+      <div class="muted" id="calibration-help">Click 4 outer court corners clockwise: near-left, near-right, far-right, far-left.</div>
+      <div id="calibration-wrap">
+        <video id="calibration-video" controls preload="metadata"></video>
+        <canvas id="calibration-canvas"></canvas>
+      </div>
+      <div class="row-between" style="margin-top: 12px">
+        <button id="reset-calibration-btn">Reset points</button>
+        <button id="save-calibration-btn" class="primary">Save calibration</button>
+      </div>
+    </section>
+
+    <section id="analyses-section" class="card" hidden>
+      <h2>Analyses</h2>
+      <table id="analyses-table">
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Algorithm</th>
+            <th>Status</th>
+            <th>Progress</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="analyses-tbody"></tbody>
+      </table>
+    </section>
+
+    <!-- Phase 1: Upload -->
+    <section id="upload-section" class="card">
+      <h2>Upload a video</h2>
+      <input type="file" id="file-input" accept=".mp4,.mkv,.mov,.m4v" />
+      <button id="upload-btn" disabled>Upload &amp; Analyze</button>
+      <button id="cancel-upload-btn" hidden>Cancel</button>
+      <div id="upload-progress" hidden>
+        <progress id="progress-bar" value="0" max="100"></progress>
+        <span id="progress-label">0%</span>
+      </div>
+    </section>
+
+    <!-- Phase 2: Status -->
+    <section id="status-section" class="card" hidden>
+      <h2>2. Analyzing</h2>
+      <div class="status-row">
+        <div class="spinner"></div>
+        <div style="flex: 1">
+          <div id="status-text">Starting...</div>
+          <div class="muted" id="status-sub"></div>
+          <progress id="analysis-progress" value="0" max="100" style="width: 100%; margin-top: 8px"></progress>
+        </div>
+      </div>
+    </section>
+
+    <!-- Phase 3: Editor -->
+    <section id="editor-section" hidden>
+      <div class="row-between" style="margin-bottom: 12px">
+        <button id="back-to-library-btn">← Back to analyses</button>
+        <span class="muted" id="editor-title"></span>
+      </div>
+      <div class="card">
+        <div id="player-wrap">
+          <video id="player" controls preload="metadata"></video>
+          <canvas id="pose-overlay"></canvas>
+        </div>
+        <div class="player-controls">
+          <button id="play-all-on">Play all ON segments</button>
+          <span id="player-time" class="muted">0:00 / 0:00</span>
+        </div>
+      </div>
+
+      <div class="card" id="analysis-config-card">
+        <h2>Analysis Config</h2>
+        <div id="analysis-configs" class="config-list"></div>
+      </div>
+
+      <div class="card" id="pose-panel" hidden>
+        <div class="row-between">
+          <h2>Pose Skeleton Data</h2>
+          <label class="muted"><input id="pose-overlay-toggle" type="checkbox" /> Show overlay</label>
+        </div>
+        <div id="pose-summary" class="muted"></div>
+        <div class="muted" style="margin-top: 6px">
+          Max Box Conf is the highest person-detection confidence in that sampled frame.
+          Avg Keypoint Conf is the average confidence of detected body landmarks.
+        </div>
+        <div id="pose-current" style="margin-top: 8px"></div>
+        <div id="pose-person-details" style="margin-top: 8px"></div>
+        <table class="sample-table" style="margin-top: 8px">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>People</th>
+              <th>Max Box Conf</th>
+              <th>Avg Keypoint Conf</th>
+            </tr>
+          </thead>
+          <tbody id="pose-frames-tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Timeline</h2>
+        <div id="timeline-wrap">
+          <canvas id="timeline" height="56"></canvas>
+        </div>
+        <div class="legend">
+          <span class="legend-on"></span> ON (in play)
+          <span class="legend-off"></span> OFF (cut)
+          <span class="muted">Click a segment to toggle on/off. Click the timeline to seek.</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row-between">
+          <h2>Detector Experiment</h2>
+          <button id="reset-knobs-btn">Reset defaults</button>
+        </div>
+        <div id="analysis-summary" class="muted">No cached detector artifact loaded.</div>
+        <div class="knob-grid">
+          <label>
+            <span>diff_threshold</span>
+            <input id="knob-diff-threshold" type="number" min="0" max="255" step="1" />
+          </label>
+          <label>
+            <span>motion_threshold</span>
+            <input id="knob-motion-threshold" type="number" min="0" step="0.001" />
+          </label>
+          <label>
+            <span>merge_gap_s</span>
+            <span class="inline-control">
+              <input id="enable-merge-gap" type="checkbox" />
+              <input id="knob-merge-gap" type="number" min="0" step="0.1" />
+            </span>
+          </label>
+          <label>
+            <span>min_segment_s</span>
+            <span class="inline-control">
+              <input id="enable-min-segment" type="checkbox" />
+              <input id="knob-min-segment" type="number" min="0" step="0.1" />
+            </span>
+          </label>
+          <label>
+            <span>segment_padding_s</span>
+            <span class="inline-control">
+              <input id="enable-padding" type="checkbox" />
+              <input id="knob-segment-padding" type="number" min="0" step="0.1" />
+            </span>
+          </label>
+          <label class="readonly-knob">
+            <span>sample_fps</span>
+            <input id="knob-sample-fps" type="number" disabled />
+            <small>Re-analyze</small>
+          </label>
+          <label class="readonly-knob">
+            <span>median_bg_samples</span>
+            <input id="knob-median-bg-samples" type="number" disabled />
+            <small>Re-analyze</small>
+          </label>
+          <label class="readonly-knob">
+            <span>court_weight</span>
+            <input id="knob-court-weight" type="number" min="0" step="0.05" disabled />
+            <small>Re-analyze</small>
+          </label>
+          <label class="readonly-knob">
+            <span>outside_weight</span>
+            <input id="knob-outside-weight" type="number" min="0" step="0.05" disabled />
+            <small>Re-analyze</small>
+          </label>
+          <label class="readonly-knob">
+            <span>near_camera_weight</span>
+            <input id="knob-near-camera-weight" type="number" min="0" step="0.05" disabled />
+            <small>Re-analyze</small>
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row-between">
+          <h2>Segments</h2>
+          <div class="muted" id="summary"></div>
+        </div>
+        <table id="segments-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>On</th>
+              <th>Start</th>
+              <th>End</th>
+              <th>Duration</th>
+              <th>Score</th>
+              <th>Samples</th>
+              <th>Stage</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="segments-tbody"></tbody>
+        </table>
+        <div class="row-between" style="margin-top: 12px">
+          <button id="add-segment-btn">+ Add segment at current time</button>
+          <button id="export-btn" class="primary">Export Video</button>
+        </div>
+      </div>
+
+      <!-- Phase 4: Export status / download -->
+      <section id="export-section" class="card" hidden>
+        <h2>Exporting</h2>
+        <div class="status-row">
+          <div class="spinner" id="export-spinner"></div>
+          <div>
+            <div id="export-text">Stitching segments...</div>
+            <a id="download-link" hidden class="primary-btn-link">Download Video</a>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div id="help-popover" class="help-popover" hidden></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

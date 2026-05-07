@@ -1,0 +1,35 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# JS / Node
+node_modules/
+
+# OS / Editor scratch
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local Claude Code session state
+.claude/
+
+# Runtime data — uploads, exports, sqlite db, analysis artifacts
+data/
+.env
+
+# Auto-downloaded ML weights
+*.pt
+
+# Analysis artifacts
+*.json.gz
+
+# Raw video files — defense in depth even if dropped outside data/
+*.mov
+*.MOV
+*.mp4
+*.mkv
+*.m4v
+*.avi
+*.webm
