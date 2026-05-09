@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import init_db
-from app.routers import analysis, download, export, pose, process, segments, status, upload, videos
+from app.routers import analysis, download, export, hit_study, pose, process, segments, status, strike_labels, upload, videos
 
 
 def _configure_logging() -> None:
@@ -49,6 +49,8 @@ app.include_router(process.router)
 app.include_router(status.router)
 app.include_router(analysis.router)
 app.include_router(pose.router)
+app.include_router(hit_study.router)
+app.include_router(strike_labels.router)
 app.include_router(segments.router)
 app.include_router(export.router)
 app.include_router(download.router)

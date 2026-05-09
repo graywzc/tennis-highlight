@@ -78,7 +78,7 @@ class DetectorConfigSchemaTests(unittest.TestCase):
     belong to which detector. These tests guard its shape."""
 
     def test_three_known_detectors_present(self):
-        for det in ("median_frame", "median_court_roi", "pose_skeleton_yolo"):
+        for det in ("median_frame", "median_court_roi", "pose_skeleton_yolo", "near_player_hit_study"):
             with self.subTest(detector=det):
                 keys = _detector_keys(APP_JS, det)
                 self.assertGreater(
@@ -145,7 +145,7 @@ class HelpTextCoverageTests(unittest.TestCase):
     def test_every_detector_key_has_help_text(self):
         help_keys = _help_text_keys(APP_JS)
         all_keys = set()
-        for det in ("median_frame", "median_court_roi", "pose_skeleton_yolo"):
+        for det in ("median_frame", "median_court_roi", "pose_skeleton_yolo", "near_player_hit_study"):
             all_keys |= _detector_keys(APP_JS, det)
         missing = all_keys - help_keys
         self.assertEqual(
@@ -170,7 +170,7 @@ class HtmlContractTests(unittest.TestCase):
         )
 
     def test_data_algorithms_reference_known_detectors(self):
-        valid = {"median_frame", "median_court_roi", "pose_skeleton_yolo"}
+        valid = {"median_frame", "median_court_roi", "pose_skeleton_yolo", "near_player_hit_study"}
         for match in re.finditer(r'data-algorithms="([^"]+)"', INDEX_HTML):
             for algo in match.group(1).split():
                 with self.subTest(algorithm=algo):
@@ -198,7 +198,7 @@ class HtmlContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(match)
         options = set(re.findall(r'value="([^"]+)"', match.group(1)))
-        valid = {"median_frame", "median_court_roi", "pose_skeleton_yolo"}
+        valid = {"median_frame", "median_court_roi", "pose_skeleton_yolo", "near_player_hit_study"}
         self.assertEqual(
             options,
             valid,

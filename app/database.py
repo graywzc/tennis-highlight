@@ -75,9 +75,25 @@ CREATE TABLE IF NOT EXISTS analyses (
     updated_at      REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS strike_labels (
+    id              TEXT PRIMARY KEY,
+    analysis_id     TEXT NOT NULL,
+    time_s          REAL NOT NULL,
+    source          TEXT NOT NULL,
+    is_strike       INTEGER NOT NULL,
+    algorithm_validated INTEGER,
+    comment         TEXT,
+    created_at      REAL NOT NULL,
+    updated_at      REAL NOT NULL,
+    FOREIGN KEY (analysis_id) REFERENCES analyses(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_segments_video ON segments(video_id, sort_order);
 CREATE INDEX IF NOT EXISTS idx_exports_video ON exports(video_id);
 CREATE INDEX IF NOT EXISTS idx_analyses_video ON analyses(video_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_strike_labels_analysis ON strike_labels(analysis_id, time_s);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_strike_labels_unique
+    ON strike_labels(analysis_id, source, time_s);
 """
 
 
@@ -621,9 +637,102 @@ async def delete_analysis_run(analysis_id: str) -> dict | None:
                 return None
             artifact_path = row["artifact_path"]
             conn.execute("DELETE FROM segments WHERE analysis_id=?", (analysis_id,))
+            conn.execute("DELETE FROM strike_labels WHERE analysis_id=?", (analysis_id,))
             conn.execute("DELETE FROM analyses WHERE id=?", (analysis_id,))
             conn.commit()
             return {"artifact_path": artifact_path}
+    return await asyncio.to_thread(_q)
+
+
+# ---- Strike labels -------------------------------------------------------
+
+def _round_time(time_s: float) -> float:
+    """Round to 1 ms so two POSTs of the same nominal time deduplicate."""
+    return round(float(time_s), 3)
+
+
+async def upsert_strike_label(
+    analysis_id: str,
+    *,
+    time_s: float,
+    source: str,
+    is_strike: bool,
+    algorithm_validated: bool | None,
+    comment: str | None,
+) -> sqlite3.Row:
+    """Insert or update a label, keyed by (analysis_id, source, time_s)."""
+    rounded = _round_time(time_s)
+
+    def _q():
+        with _connect() as conn:
+            existing = conn.execute(
+                "SELECT id, created_at FROM strike_labels "
+                "WHERE analysis_id=? AND source=? AND time_s=?",
+                (analysis_id, source, rounded),
+            ).fetchone()
+            now = _now()
+            if existing is None:
+                label_id = uuid4().hex
+                conn.execute(
+                    """
+                    INSERT INTO strike_labels (
+                        id, analysis_id, time_s, source, is_strike,
+                        algorithm_validated, comment, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        label_id,
+                        analysis_id,
+                        rounded,
+                        source,
+                        1 if is_strike else 0,
+                        None if algorithm_validated is None else (1 if algorithm_validated else 0),
+                        comment,
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                label_id = existing["id"]
+                conn.execute(
+                    """
+                    UPDATE strike_labels
+                    SET is_strike=?, algorithm_validated=?, comment=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        1 if is_strike else 0,
+                        None if algorithm_validated is None else (1 if algorithm_validated else 0),
+                        comment,
+                        now,
+                        label_id,
+                    ),
+                )
+            conn.commit()
+            return conn.execute(
+                "SELECT * FROM strike_labels WHERE id=?", (label_id,)
+            ).fetchone()
+    return await asyncio.to_thread(_q)
+
+
+async def list_strike_labels(analysis_id: str) -> list[sqlite3.Row]:
+    def _q():
+        with _connect() as conn:
+            return conn.execute(
+                "SELECT * FROM strike_labels WHERE analysis_id=? "
+                "ORDER BY time_s ASC, source ASC",
+                (analysis_id,),
+            ).fetchall()
+    return await asyncio.to_thread(_q)
+
+
+async def delete_strike_label(label_id: str) -> bool:
+    def _q():
+        with _connect() as conn:
+            cur = conn.execute("DELETE FROM strike_labels WHERE id=?", (label_id,))
+            conn.commit()
+            return cur.rowcount > 0
     return await asyncio.to_thread(_q)
 
 

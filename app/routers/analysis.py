@@ -10,6 +10,8 @@ from app.database import (
     update_analysis_knobs,
 )
 from app.models import (
+    AudioPreviewRequest,
+    AudioPreviewResponse,
     AnalysisMetadata,
     AnalysisPreviewRequest,
     AnalysisPreviewResponse,
@@ -18,7 +20,9 @@ from app.models import (
     Segment,
 )
 from app.pipeline.motion_analysis import default_knobs, load_artifact, normalize_knobs, recompute_from_artifact
+from app.pipeline.near_player_hit_study import HIT_STUDY_ALGORITHM, load_hit_study_artifact
 from app.pipeline.pose_analysis import POSE_ALGORITHM, load_pose_artifact
+from app.pipeline.rally_detection import default_rally_knobs, preview_audio_range
 from app.routers.segments import segment_from_row
 
 router = APIRouter()
@@ -93,8 +97,8 @@ async def get_analysis(analysis_id: str) -> AnalysisResponse:
 
     if analysis["artifact_path"]:
         artifact_path = _artifact_path(analysis)
-        if analysis["algorithm"] == POSE_ALGORITHM:
-            artifact = load_pose_artifact(artifact_path)
+        if analysis["algorithm"] in {POSE_ALGORITHM, HIT_STUDY_ALGORITHM}:
+            artifact = load_pose_artifact(artifact_path) if analysis["algorithm"] == POSE_ALGORITHM else load_hit_study_artifact(artifact_path)
             metadata = {
                 **artifact["metadata"],
                 "median_bg_samples": 0,
@@ -163,5 +167,41 @@ async def preview_analysis(analysis_id: str, payload: AnalysisPreviewRequest) ->
         duration_s=float(analysis["duration_s"]),
         knobs=_knobs_model(result["knobs"]),
         segments=[segment_from_row(r) for r in rows],
+        summary=result["summary"],
+    )
+
+
+@router.post("/analysis/{analysis_id}/audio-preview", response_model=AudioPreviewResponse)
+async def preview_audio(analysis_id: str, payload: AudioPreviewRequest) -> AudioPreviewResponse:
+    analysis = await get_analysis_run(analysis_id)
+    if analysis is None:
+        raise HTTPException(404, "analysis not found")
+    if analysis["algorithm"] not in {POSE_ALGORITHM, HIT_STUDY_ALGORITHM}:
+        raise HTTPException(400, "audio preview is only available for pose-based analyses")
+    artifact_path = _artifact_path(analysis)
+    artifact = load_pose_artifact(artifact_path) if analysis["algorithm"] == POSE_ALGORITHM else load_hit_study_artifact(artifact_path)
+
+    start_s = max(0.0, float(payload.range_start_s))
+    end_s = min(float(analysis["duration_s"]), float(payload.range_end_s))
+    if end_s <= start_s:
+        raise HTTPException(422, "range_end_s must be greater than range_start_s")
+
+    requested = payload.knobs.model_dump()
+    knobs = normalize_knobs({**default_rally_knobs(), **requested})
+    result = preview_audio_range(
+        Path(analysis["filepath"]),
+        start_s,
+        end_s,
+        artifact.get("frames") or [],
+        knobs,
+    )
+    return AudioPreviewResponse(
+        video_id=analysis["video_id"],
+        analysis_id=analysis_id,
+        duration_s=float(analysis["duration_s"]),
+        range_start_s=start_s,
+        range_end_s=end_s,
+        knobs=_knobs_model(knobs),
+        impacts=result["validated_impacts"],
         summary=result["summary"],
     )

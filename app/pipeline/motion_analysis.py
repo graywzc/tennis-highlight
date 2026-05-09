@@ -52,6 +52,19 @@ def default_knobs() -> dict:
         "court_weight": 1.0,
         "outside_weight": 0.15,
         "near_camera_weight": 0.0,
+        "audio_sample_rate": 22050,
+        "bandpass_low_hz": 1000.0,
+        "bandpass_high_hz": 8000.0,
+        "peak_height_mad_k": 6.0,
+        "peak_prominence_mult": 2.0,
+        "min_impact_separation_s": 0.15,
+        "min_spectral_centroid_hz": 2500.0,
+        "pose_window_s": 0.75,
+        "wrist_conf_min": 0.3,
+        "min_wrist_velocity": 0.4,
+        "max_gap_s": 5.0,
+        "min_hits_per_rally": 2,
+        "rally_padding_s": 1.0,
     }
 
 
@@ -582,6 +595,22 @@ def normalize_knobs(knobs: dict | None, defaults: dict | None = None) -> dict:
     base["enable_merge_gap"] = bool(base.get("enable_merge_gap", True))
     base["enable_min_segment"] = bool(base.get("enable_min_segment", True))
     base["enable_padding"] = bool(base.get("enable_padding", True))
+    base["audio_sample_rate"] = max(8000, int(base.get("audio_sample_rate", 22050)))
+    base["bandpass_low_hz"] = max(1.0, float(base.get("bandpass_low_hz", 1000.0)))
+    base["bandpass_high_hz"] = max(
+        base["bandpass_low_hz"] + 1.0,
+        float(base.get("bandpass_high_hz", 8000.0)),
+    )
+    base["peak_height_mad_k"] = max(0.0, float(base.get("peak_height_mad_k", 6.0)))
+    base["peak_prominence_mult"] = max(0.0, float(base.get("peak_prominence_mult", 2.0)))
+    base["min_impact_separation_s"] = max(0.0, float(base.get("min_impact_separation_s", 0.15)))
+    base["min_spectral_centroid_hz"] = max(0.0, float(base.get("min_spectral_centroid_hz", 2500.0)))
+    base["pose_window_s"] = max(0.0, float(base.get("pose_window_s", 0.75)))
+    base["wrist_conf_min"] = max(0.0, min(1.0, float(base.get("wrist_conf_min", 0.3))))
+    base["min_wrist_velocity"] = max(0.0, float(base.get("min_wrist_velocity", 0.4)))
+    base["max_gap_s"] = max(0.0, float(base.get("max_gap_s", 5.0)))
+    base["min_hits_per_rally"] = max(1, int(base.get("min_hits_per_rally", 2)))
+    base["rally_padding_s"] = max(0.0, float(base.get("rally_padding_s", 1.0)))
     return base
 
 
