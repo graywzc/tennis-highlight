@@ -1,4 +1,6 @@
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, model_validator
 
 
 class UploadResponse(BaseModel):
@@ -112,6 +114,20 @@ class DetectorKnobs(BaseModel):
     court_weight: float = 1.0
     outside_weight: float = 0.15
     near_camera_weight: float = 0.0
+    # Rally detection (used by pose_skeleton_yolo)
+    audio_sample_rate: int = 22050
+    bandpass_low_hz: float = 1000.0
+    bandpass_high_hz: float = 8000.0
+    peak_height_mad_k: float = 6.0
+    peak_prominence_mult: float = 2.0
+    min_impact_separation_s: float = 0.15
+    min_spectral_centroid_hz: float = 2500.0
+    pose_window_s: float = 0.75
+    wrist_conf_min: float = 0.3
+    min_wrist_velocity: float = 0.4
+    max_gap_s: float = 5.0
+    min_hits_per_rally: int = 2
+    rally_padding_s: float = 1.0
 
 
 class AnalysisMetadata(BaseModel):
@@ -147,3 +163,51 @@ class AnalysisPreviewResponse(BaseModel):
     knobs: DetectorKnobs
     segments: list[Segment]
     summary: dict
+
+
+class AudioPreviewRequest(BaseModel):
+    range_start_s: float
+    range_end_s: float
+    knobs: DetectorKnobs
+
+
+class AudioPreviewResponse(BaseModel):
+    video_id: str
+    analysis_id: str
+    duration_s: float
+    range_start_s: float
+    range_end_s: float
+    knobs: DetectorKnobs
+    impacts: list[dict]
+    summary: dict
+
+
+class StrikeLabelRequest(BaseModel):
+    time_s: float
+    source: Literal["candidate", "manual", "near_player_hit"]
+    is_strike: bool
+    algorithm_validated: bool | None = None
+    comment: str | None = None
+
+    @model_validator(mode="after")
+    def _check_consistency(self) -> "StrikeLabelRequest":
+        if self.source == "candidate" and self.algorithm_validated is None:
+            raise ValueError("algorithm_validated is required when source='candidate'")
+        return self
+
+
+class StrikeLabel(BaseModel):
+    id: str
+    analysis_id: str
+    time_s: float
+    source: Literal["candidate", "manual", "near_player_hit"]
+    is_strike: bool
+    algorithm_validated: bool | None
+    comment: str | None
+    created_at: float
+    updated_at: float
+
+
+class StrikeLabelsResponse(BaseModel):
+    analysis_id: str
+    labels: list[StrikeLabel]

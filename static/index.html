@@ -26,9 +26,10 @@
             <option value="median_frame">Median frame detector</option>
             <option value="median_court_roi">Court ROI median detector</option>
             <option value="pose_skeleton_yolo">YOLO pose skeleton</option>
+            <option value="near_player_hit_study">Near Player Hit Study</option>
           </select>
         </label>
-        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo near_player_hit_study">
           <span>sample_fps <button type="button" class="help-dot" data-help-key="sample_fps" aria-label="Help">?</button></span>
           <input id="start-sample-fps" type="number" min="0.1" step="0.1" value="2.0" />
         </label>
@@ -48,31 +49,31 @@
           <span>near_camera_weight <button type="button" class="help-dot" data-help-key="near_camera_weight" aria-label="Help">?</button></span>
           <input id="start-near-camera-weight" type="number" min="0" step="0.05" value="0.0" />
         </label>
-        <label class="start-config" data-algorithms="pose_skeleton_yolo">
+        <label class="start-config" data-algorithms="pose_skeleton_yolo near_player_hit_study">
           <span>pose_model <button type="button" class="help-dot" data-help-key="pose_model" aria-label="Help">?</button></span>
           <input id="start-pose-model" type="text" value="yolo11n-pose.pt" />
         </label>
-        <label class="start-config" data-algorithms="pose_skeleton_yolo">
+        <label class="start-config" data-algorithms="pose_skeleton_yolo near_player_hit_study">
           <span>pose_conf <button type="button" class="help-dot" data-help-key="pose_conf" aria-label="Help">?</button></span>
           <input id="start-pose-conf" type="number" min="0" max="1" step="0.05" value="0.25" />
         </label>
-        <label class="start-config" data-algorithms="pose_skeleton_yolo">
+        <label class="start-config" data-algorithms="pose_skeleton_yolo near_player_hit_study">
           <span>pose_imgsz <button type="button" class="help-dot" data-help-key="pose_imgsz" aria-label="Help">?</button></span>
           <input id="start-pose-imgsz" type="number" min="320" step="32" value="640" />
         </label>
-        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo near_player_hit_study">
           <span>range_start <button type="button" class="help-dot" data-help-key="range_start_s" aria-label="Help">?</button></span>
           <input id="start-range-start" type="text" value="0:00.0" />
         </label>
-        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo near_player_hit_study">
           <span>range_end <button type="button" class="help-dot" data-help-key="range_end_s" aria-label="Help">?</button></span>
           <input id="start-range-end" type="text" value="0:00.0" />
         </label>
-        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo near_player_hit_study">
           <span>start slider</span>
           <input id="start-range-start-slider" type="range" min="0" max="0" step="0.5" value="0" />
         </label>
-        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo near_player_hit_study">
           <span>end slider</span>
           <input id="start-range-end-slider" type="range" min="0" max="0" step="0.5" value="0" />
         </label>
@@ -149,165 +150,390 @@
 
     <!-- Phase 3: Editor -->
     <section id="editor-section" hidden>
-      <div class="row-between" style="margin-bottom: 12px">
+      <div class="row-between editor-topbar">
         <button id="back-to-library-btn">← Back to analyses</button>
         <span class="muted" id="editor-title"></span>
       </div>
-      <div class="card">
-        <div id="player-wrap">
-          <video id="player" controls preload="metadata"></video>
-          <canvas id="pose-overlay"></canvas>
-        </div>
-        <div class="player-controls">
-          <button id="play-all-on">Play all ON segments</button>
-          <span id="player-time" class="muted">0:00 / 0:00</span>
-        </div>
-      </div>
 
-      <div class="card" id="analysis-config-card">
-        <h2>Analysis Config</h2>
-        <div id="analysis-configs" class="config-list"></div>
-      </div>
+      <div class="editor-grid">
+        <!-- LEFT column: configs and detector knobs -->
+        <div class="editor-left">
+          <div class="card" id="analysis-config-card">
+            <h2>Analysis Config</h2>
+            <div id="analysis-configs" class="config-list"></div>
+          </div>
 
-      <div class="card" id="pose-panel" hidden>
-        <div class="row-between">
-          <h2>Pose Skeleton Data</h2>
-          <label class="muted"><input id="pose-overlay-toggle" type="checkbox" /> Show overlay</label>
-        </div>
-        <div id="pose-summary" class="muted"></div>
-        <div class="muted" style="margin-top: 6px">
-          Max Box Conf is the highest person-detection confidence in that sampled frame.
-          Avg Keypoint Conf is the average confidence of detected body landmarks.
-        </div>
-        <div id="pose-current" style="margin-top: 8px"></div>
-        <div id="pose-person-details" style="margin-top: 8px"></div>
-        <table class="sample-table" style="margin-top: 8px">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>People</th>
-              <th>Max Box Conf</th>
-              <th>Avg Keypoint Conf</th>
-            </tr>
-          </thead>
-          <tbody id="pose-frames-tbody"></tbody>
-        </table>
-      </div>
+          <div class="card" id="pose-panel" hidden>
+            <div class="row-between">
+              <h2>Pose Skeleton Data</h2>
+              <label class="muted"><input id="pose-overlay-toggle" type="checkbox" /> Show overlay</label>
+            </div>
+            <div id="pose-summary" class="muted"></div>
+            <div class="muted" style="margin-top: 6px">
+              Max Box Conf is the highest person-detection confidence in that sampled frame.
+              Avg Keypoint Conf is the average confidence of detected body landmarks.
+            </div>
+            <div id="pose-current" style="margin-top: 8px"></div>
+            <div id="pose-person-details" style="margin-top: 8px"></div>
+            <table class="sample-table" style="margin-top: 8px">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>People</th>
+                  <th>Max Box Conf</th>
+                  <th>Avg Keypoint Conf</th>
+                </tr>
+              </thead>
+              <tbody id="pose-frames-tbody"></tbody>
+            </table>
+          </div>
 
-      <div class="card">
-        <h2>Timeline</h2>
-        <div id="timeline-wrap">
-          <canvas id="timeline" height="56"></canvas>
-        </div>
-        <div class="legend">
-          <span class="legend-on"></span> ON (in play)
-          <span class="legend-off"></span> OFF (cut)
-          <span class="muted">Click a segment to toggle on/off. Click the timeline to seek.</span>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="row-between">
-          <h2>Detector Experiment</h2>
-          <button id="reset-knobs-btn">Reset defaults</button>
-        </div>
-        <div id="analysis-summary" class="muted">No cached detector artifact loaded.</div>
-        <div class="knob-grid">
-          <label>
-            <span>diff_threshold</span>
-            <input id="knob-diff-threshold" type="number" min="0" max="255" step="1" />
-          </label>
-          <label>
-            <span>motion_threshold</span>
-            <input id="knob-motion-threshold" type="number" min="0" step="0.001" />
-          </label>
-          <label>
-            <span>merge_gap_s</span>
-            <span class="inline-control">
-              <input id="enable-merge-gap" type="checkbox" />
-              <input id="knob-merge-gap" type="number" min="0" step="0.1" />
-            </span>
-          </label>
-          <label>
-            <span>min_segment_s</span>
-            <span class="inline-control">
-              <input id="enable-min-segment" type="checkbox" />
-              <input id="knob-min-segment" type="number" min="0" step="0.1" />
-            </span>
-          </label>
-          <label>
-            <span>segment_padding_s</span>
-            <span class="inline-control">
-              <input id="enable-padding" type="checkbox" />
-              <input id="knob-segment-padding" type="number" min="0" step="0.1" />
-            </span>
-          </label>
-          <label class="readonly-knob">
-            <span>sample_fps</span>
-            <input id="knob-sample-fps" type="number" disabled />
-            <small>Re-analyze</small>
-          </label>
-          <label class="readonly-knob">
-            <span>median_bg_samples</span>
-            <input id="knob-median-bg-samples" type="number" disabled />
-            <small>Re-analyze</small>
-          </label>
-          <label class="readonly-knob">
-            <span>court_weight</span>
-            <input id="knob-court-weight" type="number" min="0" step="0.05" disabled />
-            <small>Re-analyze</small>
-          </label>
-          <label class="readonly-knob">
-            <span>outside_weight</span>
-            <input id="knob-outside-weight" type="number" min="0" step="0.05" disabled />
-            <small>Re-analyze</small>
-          </label>
-          <label class="readonly-knob">
-            <span>near_camera_weight</span>
-            <input id="knob-near-camera-weight" type="number" min="0" step="0.05" disabled />
-            <small>Re-analyze</small>
-          </label>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="row-between">
-          <h2>Segments</h2>
-          <div class="muted" id="summary"></div>
-        </div>
-        <table id="segments-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>On</th>
-              <th>Start</th>
-              <th>End</th>
-              <th>Duration</th>
-              <th>Score</th>
-              <th>Samples</th>
-              <th>Stage</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="segments-tbody"></tbody>
-        </table>
-        <div class="row-between" style="margin-top: 12px">
-          <button id="add-segment-btn">+ Add segment at current time</button>
-          <button id="export-btn" class="primary">Export Video</button>
-        </div>
-      </div>
-
-      <!-- Phase 4: Export status / download -->
-      <section id="export-section" class="card" hidden>
-        <h2>Exporting</h2>
-        <div class="status-row">
-          <div class="spinner" id="export-spinner"></div>
-          <div>
-            <div id="export-text">Stitching segments...</div>
-            <a id="download-link" hidden class="primary-btn-link">Download Video</a>
+          <div class="card">
+            <div class="row-between">
+              <h2>Detector Experiment</h2>
+              <button id="reset-knobs-btn">Reset defaults</button>
+            </div>
+            <div id="analysis-summary" class="muted">No cached detector artifact loaded.</div>
+            <div class="knob-grid">
+              <label>
+                <span>diff_threshold</span>
+                <input id="knob-diff-threshold" type="number" min="0" max="255" step="1" />
+              </label>
+              <label>
+                <span>motion_threshold</span>
+                <input id="knob-motion-threshold" type="number" min="0" step="0.001" />
+              </label>
+              <label>
+                <span>merge_gap_s</span>
+                <span class="inline-control">
+                  <input id="enable-merge-gap" type="checkbox" />
+                  <input id="knob-merge-gap" type="number" min="0" step="0.1" />
+                </span>
+              </label>
+              <label>
+                <span>min_segment_s</span>
+                <span class="inline-control">
+                  <input id="enable-min-segment" type="checkbox" />
+                  <input id="knob-min-segment" type="number" min="0" step="0.1" />
+                </span>
+              </label>
+              <label>
+                <span>segment_padding_s</span>
+                <span class="inline-control">
+                  <input id="enable-padding" type="checkbox" />
+                  <input id="knob-segment-padding" type="number" min="0" step="0.1" />
+                </span>
+              </label>
+              <label class="readonly-knob">
+                <span>sample_fps</span>
+                <input id="knob-sample-fps" type="number" disabled />
+                <small>Re-analyze</small>
+              </label>
+              <label class="readonly-knob">
+                <span>median_bg_samples</span>
+                <input id="knob-median-bg-samples" type="number" disabled />
+                <small>Re-analyze</small>
+              </label>
+              <label class="readonly-knob">
+                <span>court_weight</span>
+                <input id="knob-court-weight" type="number" min="0" step="0.05" disabled />
+                <small>Re-analyze</small>
+              </label>
+              <label class="readonly-knob">
+                <span>outside_weight</span>
+                <input id="knob-outside-weight" type="number" min="0" step="0.05" disabled />
+                <small>Re-analyze</small>
+              </label>
+              <label class="readonly-knob">
+                <span>near_camera_weight</span>
+                <input id="knob-near-camera-weight" type="number" min="0" step="0.05" disabled />
+                <small>Re-analyze</small>
+              </label>
+              <label class="audio-knob">
+                <span>bandpass_low_hz</span>
+                <input id="knob-bandpass-low-hz" type="number" min="20" step="50" />
+              </label>
+              <label class="audio-knob">
+                <span>bandpass_high_hz</span>
+                <input id="knob-bandpass-high-hz" type="number" min="100" step="50" />
+              </label>
+              <label class="audio-knob">
+                <span>peak_height_mad_k</span>
+                <input id="knob-peak-height-mad-k" type="number" min="0" step="0.5" />
+              </label>
+              <label class="audio-knob">
+                <span>peak_prominence_mult</span>
+                <input id="knob-peak-prominence-mult" type="number" min="0" step="0.25" />
+              </label>
+              <label class="audio-knob">
+                <span>min_spectral_centroid_hz</span>
+                <input id="knob-min-spectral-centroid-hz" type="number" min="0" step="100" />
+              </label>
+              <label class="audio-knob">
+                <span>min_wrist_velocity</span>
+                <input id="knob-min-wrist-velocity" type="number" min="0" step="0.05" />
+              </label>
+            </div>
           </div>
         </div>
-      </section>
+
+        <div class="editor-resizer" id="editor-resizer-left" role="separator" aria-label="Resize left and center panels" tabindex="0"></div>
+
+        <!-- CENTER column: player + timeline -->
+        <div class="editor-center">
+          <div class="card">
+            <div id="player-wrap">
+              <video id="player" controls preload="metadata"></video>
+              <canvas id="pose-overlay"></canvas>
+            </div>
+            <div class="player-controls">
+              <button id="play-all-on">Play all ON segments</button>
+              <span id="player-time" class="muted">0:00 / 0:00</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="row-between">
+              <h2>Timeline</h2>
+              <div class="strike-nav" id="strike-nav" hidden>
+                <button id="prev-strike-btn" title="Jump to previous ball strike (shortcut: [)">◀ Prev strike</button>
+                <span id="strike-count" class="muted"></span>
+                <span id="centroid-readout" class="muted centroid-readout">Centroid —</span>
+                <button id="next-strike-btn" title="Jump to next ball strike (shortcut: ])">Next strike ▶</button>
+                <button id="timeline-zoom-range-btn" title="Zoom timeline to the audio recheck range">Zoom range</button>
+                <button id="timeline-reset-zoom-btn" title="Reset timeline zoom">Reset zoom</button>
+                <label class="muted strike-include-rejected-label">
+                  <input id="strike-include-rejected" type="checkbox" />
+                  Include rejected
+                </label>
+              </div>
+            </div>
+            <div id="timeline-wrap">
+              <canvas id="timeline"></canvas>
+            </div>
+            <div class="legend">
+              <span class="legend-on"></span> ON (in play)
+              <span class="legend-off"></span> OFF (cut)
+              <span class="legend-strike-on"></span> Strike (validated)
+              <span class="legend-strike-off"></span> Strike (rejected)
+              <span class="legend-centroid"></span> Centroid
+              <span class="legend-strike-disputed"></span> Disputed
+              <span class="legend-strike-missed">▼</span> Missed strike
+              <span class="muted">Click a segment to toggle on/off. Click the timeline to seek.</span>
+            </div>
+          </div>
+
+          <div class="card" id="strike-diagnostic-card" hidden>
+            <div class="row-between">
+              <h2>Strike Diagnostics</h2>
+              <span class="muted" id="strike-stats">No labels yet</span>
+            </div>
+            <div id="strike-current" class="strike-current"></div>
+            <hr class="strike-divider" />
+            <div class="strike-audio-preview">
+              <strong>Audio recheck</strong>
+              <div class="audio-range-slider" id="audio-range-slider">
+                <input id="audio-preview-start-range" type="range" min="0" max="100" step="0.1" value="0" />
+                <input id="audio-preview-end-range" type="range" min="0" max="100" step="0.1" value="100" />
+              </div>
+              <div class="strike-preview-controls">
+                <span id="audio-preview-range-label" class="muted">0:00.0 to 0:00.0</span>
+                <button id="audio-preview-use-segment-btn">Use current segment</button>
+                <button id="audio-preview-run-btn">Analyze range</button>
+              </div>
+              <div id="audio-preview-summary" class="muted">Tune audio knobs, then analyze a short range to refresh visible candidates.</div>
+            </div>
+            <hr class="strike-divider" />
+            <div class="hit-study-block" id="hit-study-block" hidden>
+              <strong>Near Player Hit Study</strong>
+              <div class="muted">Press H to mark a hit. Space toggles play/pause while you are not typing.</div>
+              <div class="hit-study-actions">
+                <button id="mark-near-hit-btn">Mark near-player hit at <span id="near-hit-time">0:00.0</span></button>
+                <button id="evaluate-hit-study-btn">Evaluate labels</button>
+                <label class="muted hit-study-slow-toggle">
+                  <input id="ball-heatmap-toggle" type="checkbox" />
+                  Ball heatmap
+                </label>
+                <label class="muted hit-study-slow-toggle">
+                  <input id="ball-roi-overlay-toggle" type="checkbox" checked />
+                  Show ROI
+                </label>
+                <button id="ball-diagnostic-btn">Refresh heatmap</button>
+                <button id="ball-scan-btn" title="Scan the current audio recheck range; falls back to timeline zoom range">Scan ROI range</button>
+                <button id="save-near-hits-btn">Save marks</button>
+                <button id="load-near-hits-btn">Load marks</button>
+                <label class="muted hit-study-slow-toggle">
+                  <input id="slow-label-mode-toggle" type="checkbox" />
+                  Slow hold mode
+                </label>
+                <label class="muted hit-study-rate">
+                  Speed
+                  <select id="slow-label-rate">
+                    <option value="0.25">0.25x</option>
+                    <option value="0.5" selected>0.5x</option>
+                    <option value="0.75">0.75x</option>
+                  </select>
+                </label>
+              </div>
+              <div class="ball-roi-controls">
+                <label class="ball-roi-check">
+                  <input id="ball-exclude-player-toggle" type="checkbox" checked />
+                  Exclude player body
+                </label>
+                <label>
+                  ROI mode
+                  <select id="ball-roi-mode">
+                    <option value="near_player" selected>Near player</option>
+                    <option value="full_frame">Whole screen</option>
+                  </select>
+                </label>
+                <label>
+                  Detector
+                  <select id="ball-detector-mode">
+                    <option value="motion" selected>Motion blobs</option>
+                    <option value="tracknet">TrackNet</option>
+                  </select>
+                </label>
+                <label>
+                  ROI width
+                  <input id="ball-roi-width" type="range" min="1" max="6" step="0.25" value="3" />
+                </label>
+                <label>
+                  ROI height
+                  <input id="ball-roi-height" type="range" min="0.5" max="3" step="0.25" value="1" />
+                </label>
+                <label>
+                  Ball sensitivity
+                  <input id="ball-diff-threshold" type="range" min="6" max="24" step="1" value="12" />
+                </label>
+              </div>
+              <details class="tracknet-scan-config" open>
+                <summary>TrackNet scan</summary>
+                <div class="ball-roi-controls">
+                  <label>
+                    Scan target
+                    <select id="ball-scan-mode">
+                      <option value="marked_hits" selected>Around marked hits</option>
+                      <option value="range">Audio range</option>
+                    </select>
+                  </label>
+                  <label>
+                    Scan FPS
+                    <select id="ball-scan-fps">
+                      <option value="2" selected>2 fps</option>
+                      <option value="4">4 fps</option>
+                      <option value="8">8 fps</option>
+                      <option value="15">15 fps</option>
+                      <option value="30">30 fps</option>
+                      <option value="original">Original fps</option>
+                    </select>
+                  </label>
+                  <label>
+                    Before hit
+                    <input id="ball-scan-before" type="number" min="0" max="5" step="0.1" value="1.0" />
+                  </label>
+                  <label>
+                    After hit
+                    <input id="ball-scan-after" type="number" min="0" max="5" step="0.1" value="1.0" />
+                  </label>
+                  <label>
+                    Width
+                    <select id="tracknet-width">
+                      <option value="640" selected>640</option>
+                      <option value="1280">1280</option>
+                      <option value="1920">1920</option>
+                      <option value="3840">3840</option>
+                    </select>
+                  </label>
+                  <label>
+                    Height
+                    <select id="tracknet-height">
+                      <option value="360" selected>360</option>
+                      <option value="720">720</option>
+                      <option value="1080">1080</option>
+                      <option value="2160">2160</option>
+                    </select>
+                  </label>
+                  <label>
+                    Frame stack
+                    <select id="tracknet-stack-frames" disabled>
+                      <option value="3" selected>3 frames</option>
+                    </select>
+                  </label>
+                </div>
+              </details>
+              <div id="ball-scan-progress" class="ball-scan-progress" hidden>
+                <progress id="ball-scan-progress-bar" value="0" max="100"></progress>
+                <span id="ball-scan-progress-text" class="muted">Queued</span>
+              </div>
+              <div class="hit-study-actions">
+                <button id="ball-scan-stop-btn" disabled>Stop scan</button>
+                <button id="ball-scan-save-btn">Save scan</button>
+                <button id="ball-scan-load-btn">Load scan</button>
+              </div>
+              <div id="hit-study-labels" class="muted"></div>
+              <div id="hit-study-report" class="hit-study-report"></div>
+            </div>
+            <hr class="strike-divider hit-study-divider" />
+            <div class="strike-missed-block">
+              <strong>Missed a strike?</strong>
+              <div class="muted" style="margin: 4px 0 6px">
+                Pause the player at the moment the algorithm missed a real strike, then add it here.
+              </div>
+              <div class="strike-missed-controls">
+                <button id="add-missed-strike-btn">+ Add missed strike at <span id="missed-strike-time">0:00.0</span></button>
+                <input id="missed-strike-comment" type="text" placeholder="Optional comment" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="editor-resizer" id="editor-resizer-right" role="separator" aria-label="Resize center and right panels" tabindex="0"></div>
+
+        <!-- RIGHT column: segments + export -->
+        <div class="editor-right">
+          <div class="card">
+            <div class="row-between">
+              <h2>Segments</h2>
+              <div class="muted" id="summary"></div>
+            </div>
+            <div class="segments-table-wrap">
+              <table id="segments-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>On</th>
+                    <th>Start</th>
+                    <th>End</th>
+                    <th>Duration</th>
+                    <th>Score</th>
+                    <th>Samples</th>
+                    <th>Stage</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="segments-tbody"></tbody>
+              </table>
+            </div>
+            <div class="row-between" style="margin-top: 12px">
+              <button id="add-segment-btn">+ Add segment at current time</button>
+              <button id="export-btn" class="primary">Export Video</button>
+            </div>
+          </div>
+
+          <!-- Phase 4: Export status / download -->
+          <section id="export-section" class="card" hidden>
+            <h2>Exporting</h2>
+            <div class="status-row">
+              <div class="spinner" id="export-spinner"></div>
+              <div>
+                <div id="export-text">Stitching segments...</div>
+                <a id="download-link" hidden class="primary-btn-link">Download Video</a>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
     </section>
   </main>
 

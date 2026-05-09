@@ -21,6 +21,7 @@ from app.pipeline.motion_analysis import (
     default_knobs,
     normalize_knobs,
 )
+from app.pipeline.near_player_hit_study import HIT_STUDY_ALGORITHM, analyze_hit_study_to_artifact
 from app.pipeline.pose_analysis import POSE_ALGORITHM, analyze_pose_to_artifact
 from app.pipeline.video_editor import export_segments
 
@@ -55,9 +56,18 @@ async def run_analysis(analysis_id: str) -> None:
             config = json.loads(analysis["noninstant_knobs_json"] or "{}")
         except Exception:
             config = {}
-        if analysis["algorithm"] == POSE_ALGORITHM:
+        if analysis["algorithm"] in {POSE_ALGORITHM, HIT_STUDY_ALGORITHM}:
+            rally_keys = (
+                "audio_sample_rate", "bandpass_low_hz", "bandpass_high_hz",
+                "peak_height_mad_k", "peak_prominence_mult", "min_impact_separation_s",
+                "min_spectral_centroid_hz",
+                "pose_window_s", "wrist_conf_min", "min_wrist_velocity",
+                "max_gap_s", "min_hits_per_rally", "rally_padding_s",
+            )
+            rally_overrides = {k: config[k] for k in rally_keys if k in config}
+            analyzer = analyze_pose_to_artifact if analysis["algorithm"] == POSE_ALGORITHM else analyze_hit_study_to_artifact
             artifact_path, timeline, analysis_result = await asyncio.to_thread(
-                analyze_pose_to_artifact,
+                analyzer,
                 analysis_id,
                 video_path,
                 duration,
@@ -68,6 +78,7 @@ async def run_analysis(analysis_id: str) -> None:
                 str(config.get("pose_model", "yolo11n-pose.pt")),
                 float(config.get("pose_conf", 0.25)),
                 int(config.get("pose_imgsz", 640)),
+                rally_overrides or None,
             )
         else:
             court_calibration = None

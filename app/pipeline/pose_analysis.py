@@ -34,6 +34,7 @@ def analyze_pose_to_artifact(
     model_name: str = DEFAULT_POSE_MODEL,
     conf_threshold: float = DEFAULT_POSE_CONF,
     image_size: int = POSE_TARGET_WIDTH,
+    rally_knob_overrides: dict | None = None,
 ) -> tuple[Path, list[dict], dict]:
     try:
         from ultralytics import YOLO
@@ -104,10 +105,38 @@ def analyze_pose_to_artifact(
         "sample_count": int(len(pose_frames)),
     }
     summary = summarize_pose_frames(pose_frames)
+
+    from app.pipeline.rally_detection import default_rally_knobs, detect_rallies
+
+    rally_knobs = {**default_rally_knobs(), **(rally_knob_overrides or {})}
+    if progress_cb:
+        progress_cb(99.0, "detecting rallies from audio + pose", None)
+    audio_result, timeline = detect_rallies(
+        video_path, video_duration_s, pose_frames, rally_knobs, progress_cb,
+    )
+    metadata["rally_knobs"] = rally_knobs
+    metadata["audio"] = audio_result.get("summary") or {}
+
+    summary = {
+        **summary,
+        "rally_count": audio_result["summary"]["rally_count"],
+        "impact_count": audio_result["summary"]["impact_count"],
+        "validated_impact_count": audio_result["summary"]["validated_impact_count"],
+        "on_count": audio_result["summary"]["rally_count"],
+    }
+
     artifact = {
         "metadata": metadata,
         "summary": summary,
         "frames": pose_frames,
+        "rally": {
+            "summary": audio_result["summary"],
+            "noise_floor": audio_result["noise_floor"],
+            "sample_rate": audio_result["sample_rate"],
+            "impacts": audio_result["validated_impacts"],
+            "segments": timeline,
+            "knobs": rally_knobs,
+        },
     }
 
     settings.analysis_dir.mkdir(parents=True, exist_ok=True)
@@ -115,18 +144,10 @@ def analyze_pose_to_artifact(
     with gzip.open(artifact_path, "wt", encoding="utf-8") as f:
         json.dump(artifact, f)
 
-    placeholder = [{
-        "start_s": float(range_start_s),
-        "end_s": float(range_end_s),
-        "is_on": False,
-        "source": "pose_skeleton_yolo",
-        "decision_stage": "data_collection",
-        "sample_count": len(pose_frames),
-    }]
     result = {
         "metadata": metadata,
         "summary": summary,
-        "knobs": {"sample_fps": sample_fps},
+        "knobs": {"sample_fps": sample_fps, **rally_knobs},
         "config": {
             "sample_fps": sample_fps,
             "pose_model": model_name,
@@ -134,9 +155,10 @@ def analyze_pose_to_artifact(
             "pose_imgsz": int(image_size),
             "range_start_s": float(range_start_s),
             "range_end_s": float(range_end_s),
+            **rally_knobs,
         },
     }
-    return artifact_path, placeholder, result
+    return artifact_path, timeline, result
 
 
 def load_pose_artifact(artifact_path: Path) -> dict:

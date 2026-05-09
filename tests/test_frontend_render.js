@@ -90,6 +90,7 @@ suite("DETECTOR_CONFIGS shape", () => {
     assert.ok(cfgs.median_frame, "median_frame missing");
     assert.ok(cfgs.median_court_roi, "median_court_roi missing");
     assert.ok(cfgs.pose_skeleton_yolo, "pose_skeleton_yolo missing");
+    assert.ok(cfgs.near_player_hit_study, "near_player_hit_study missing");
   });
 
   it("median_court_roi is a strict superset of median_frame", () => {
@@ -316,6 +317,112 @@ suite("help popover shows/hides on click", () => {
     );
     const popover = w.document.getElementById("help-popover");
     assert.ok(popover.hidden, "outside click should close popover");
+  });
+});
+
+// ---- Strike diagnostic panel ------------------------------------------
+
+suite("strikeReason classifies impact decisions", () => {
+  const win = makeDom();
+
+  it("validated normal case: reports max_wrist_v ≥ threshold", () => {
+    const reason = win.strikeReason(
+      { validated: true, fallback_used: false, max_wrist_v: 0.55, max_box_v: 0.2 },
+      { min_wrist_velocity: 0.4 },
+    );
+    assert.match(reason, /Validated.*0\.55.*0\.4/);
+  });
+
+  it("validated via fallback mentions body motion", () => {
+    const reason = win.strikeReason(
+      { validated: true, fallback_used: true, max_wrist_v: 0, max_box_v: 0.7 },
+      { min_wrist_velocity: 0.4 },
+    );
+    assert.match(reason, /fallback/i);
+    assert.match(reason, /max_box_v=0\.7/);
+  });
+
+  it("rejected with no detections explains pose window", () => {
+    const reason = win.strikeReason(
+      { validated: false, fallback_used: false, max_wrist_v: 0, max_box_v: 0 },
+      { min_wrist_velocity: 0.4, pose_window_s: 0.75 },
+    );
+    assert.match(reason, /no person detections/i);
+    assert.match(reason, /0\.75/);
+  });
+
+  it("rejected with low velocity explains threshold gap", () => {
+    const reason = win.strikeReason(
+      { validated: false, fallback_used: false, max_wrist_v: 0.21, max_box_v: 0.05 },
+      { min_wrist_velocity: 0.4 },
+    );
+    assert.match(reason, /Rejected.*0\.21.*0\.4/);
+  });
+});
+
+suite("renderStrikeDiagnostic shows the card and computes the nearest impact", () => {
+  it("hides the card when no impacts are loaded", () => {
+    const win = makeDom();
+    win.state.impacts = [];
+    win.renderStrikeDiagnostic();
+    const card = win.document.getElementById("strike-diagnostic-card");
+    assert.ok(card.hidden, "card should be hidden when impacts empty");
+  });
+
+  it("shows the card and renders the nearest candidate", () => {
+    const win = makeDom();
+    win.state.impacts = [
+      { time_s: 10.0, validated: true, max_wrist_v: 0.6, max_box_v: 0.1, snr: 5, amplitude: 0.2, fallback_used: false, player_id: 0 },
+      { time_s: 20.0, validated: false, max_wrist_v: 0.2, max_box_v: 0.1, snr: 4, amplitude: 0.1, fallback_used: false, player_id: null },
+    ];
+    win.state.poseData = { rally: { knobs: { min_wrist_velocity: 0.4, pose_window_s: 0.75 } } };
+    win.state.strikeLabels = {};
+    // Stub player.currentTime: jsdom doesn't actually run video, so we set it manually.
+    Object.defineProperty(win.document.getElementById("player"), "currentTime", {
+      configurable: true,
+      get: () => 9.7,
+    });
+    win.renderStrikeDiagnostic();
+    const card = win.document.getElementById("strike-diagnostic-card");
+    assert.ok(!card.hidden, "card should be visible");
+    const text = win.document.getElementById("strike-current").textContent;
+    assert.match(text, /VALIDATED/);
+    assert.match(text, /1\/2/, `index marker missing: ${text}`);
+  });
+
+  it("explains rejection for the nearest rejected candidate", () => {
+    const win = makeDom();
+    win.state.impacts = [
+      { time_s: 30.0, validated: false, max_wrist_v: 0.15, max_box_v: 0.0, snr: 3, amplitude: 0.05, fallback_used: false, player_id: null },
+    ];
+    win.state.poseData = { rally: { knobs: { min_wrist_velocity: 0.4, pose_window_s: 0.75 } } };
+    Object.defineProperty(win.document.getElementById("player"), "currentTime", {
+      configurable: true,
+      get: () => 30.0,
+    });
+    win.renderStrikeDiagnostic();
+    const text = win.document.getElementById("strike-current").textContent;
+    assert.match(text, /REJECTED/);
+    assert.match(text, /max_wrist_v=0\.15/);
+  });
+});
+
+suite("strike stats", () => {
+  it("counts agreement, false positives, false negatives, and missed", () => {
+    const win = makeDom();
+    win.state.impacts = [{ time_s: 1, validated: true }, { time_s: 2, validated: false }, { time_s: 3, validated: true }];
+    win.state.strikeLabels = {
+      "candidate|1.000": { source: "candidate", time_s: 1.0, algorithm_validated: true, is_strike: true },
+      "candidate|2.000": { source: "candidate", time_s: 2.0, algorithm_validated: false, is_strike: true },
+      "candidate|3.000": { source: "candidate", time_s: 3.0, algorithm_validated: true, is_strike: false },
+      "manual|7.500":   { source: "manual",   time_s: 7.5, algorithm_validated: null,  is_strike: true },
+    };
+    win.renderStrikeStats();
+    const text = win.document.getElementById("strike-stats").textContent;
+    assert.match(text, /Audited.*3\/3/);
+    assert.match(text, /false \+ve\s*1/i);  // 1 validated-but-not-a-strike
+    assert.match(text, /false −ve\s*1/);    // 1 rejected-but-was-a-strike
+    assert.match(text, /missed\s*1/);
   });
 });
 
