@@ -36,11 +36,11 @@ body:has(#editor-section:not([hidden])) main {
 .editor-grid {
   display: grid;
   grid-template-columns:
-    var(--editor-left-width, 300px)
+    var(--editor-left-width, 1fr)
     10px
     minmax(360px, 1fr)
     10px
-    var(--editor-right-width, 440px);
+    var(--editor-right-width, 1fr);
   column-gap: 10px;
   row-gap: 16px;
   align-items: start;
@@ -89,11 +89,11 @@ body.editor-resizing {
 @media (max-width: 1400px) {
   .editor-grid {
     grid-template-columns:
-      var(--editor-left-width, 260px)
+      var(--editor-left-width, 1fr)
       10px
       minmax(340px, 1fr)
       10px
-      var(--editor-right-width, 380px);
+      var(--editor-right-width, 1fr);
   }
 }
 @media (max-width: 1100px) {
