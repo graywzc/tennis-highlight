@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import init_db
-from app.routers import analysis, download, export, hit_study, pose, process, segments, status, strike_labels, upload, videos
+from app.routers import analysis, download, export, hit_study, modular_scan, pose, process, segments, status, strike_labels, upload, videos
 
 
 def _configure_logging() -> None:
@@ -50,6 +50,7 @@ app.include_router(status.router)
 app.include_router(analysis.router)
 app.include_router(pose.router)
 app.include_router(hit_study.router)
+app.include_router(modular_scan.router)
 app.include_router(strike_labels.router)
 app.include_router(segments.router)
 app.include_router(export.router)
@@ -61,4 +62,9 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/")
 async def index():
+    return FileResponse("static/index.html")
+
+@app.get("/{analysis_id}")
+async def index_analysis(analysis_id: str):
+    # This acts as a catch-all for our SPA so the frontend can read the URL path
     return FileResponse("static/index.html")

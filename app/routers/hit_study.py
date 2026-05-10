@@ -48,7 +48,12 @@ def _label_dir() -> Path:
     return path
 
 
-def _label_path(analysis_id: str) -> Path:
+def _label_path(analysis_id: str, filename: str | None = None) -> Path:
+    if filename:
+        safe_name = Path(filename).name
+        if not safe_name.endswith(".json"):
+            safe_name += ".json"
+        return _label_dir() / safe_name
     return _label_dir() / f"{analysis_id}.near-player-hit-labels.json"
 
 
@@ -462,7 +467,7 @@ def _ball_scan_path(analysis_id: str) -> Path:
 
 
 @router.post("/hit-study/{analysis_id}/labels/save")
-async def save_hit_labels(analysis_id: str) -> dict:
+async def save_hit_labels(analysis_id: str, filename: str | None = None) -> dict:
     analysis = await get_analysis_run(analysis_id)
     if analysis is None:
         raise HTTPException(404, "analysis not found")
@@ -474,7 +479,7 @@ async def save_hit_labels(analysis_id: str) -> dict:
     ]
     labels = [_row_to_label(r) for r in rows]
     labels.sort(key=lambda r: r["time_s"])
-    path = _label_path(analysis_id)
+    path = _label_path(analysis_id, filename)
     payload = {
         "analysis_id": analysis_id,
         "video_id": analysis["video_id"],
@@ -496,13 +501,13 @@ async def save_hit_labels(analysis_id: str) -> dict:
 
 
 @router.post("/hit-study/{analysis_id}/labels/load")
-async def load_hit_labels(analysis_id: str) -> dict:
+async def load_hit_labels(analysis_id: str, filename: str | None = None) -> dict:
     analysis = await get_analysis_run(analysis_id)
     if analysis is None:
         raise HTTPException(404, "analysis not found")
     if analysis["algorithm"] != HIT_STUDY_ALGORITHM:
         raise HTTPException(400, "analysis is not a near-player hit study")
-    path = _label_path(analysis_id)
+    path = _label_path(analysis_id, filename)
     if not path.exists():
         raise HTTPException(404, f"saved labels not found at {path}")
     try:
@@ -533,3 +538,36 @@ async def load_hit_labels(analysis_id: str) -> dict:
     labels = [_row_to_label(r) for r in rows]
     labels.sort(key=lambda r: r["time_s"])
     return {"analysis_id": analysis_id, "loaded_path": str(path), "labels": labels}
+
+
+@router.post("/hit-study/{analysis_id}/labels/upload")
+async def upload_hit_labels(analysis_id: str, payload: dict) -> dict:
+    analysis = await get_analysis_run(analysis_id)
+    if analysis is None:
+        raise HTTPException(404, "analysis not found")
+    if analysis["algorithm"] != HIT_STUDY_ALGORITHM:
+        raise HTTPException(400, "analysis is not a near-player hit study")
+
+    existing = [
+        r for r in await list_strike_labels(analysis_id)
+        if r["source"] == "near_player_hit"
+    ]
+    for row in existing:
+        await delete_strike_label(row["id"])
+
+    for label in payload.get("labels") or []:
+        await upsert_strike_label(
+            analysis_id,
+            time_s=float(label["time_s"]),
+            source="near_player_hit",
+            is_strike=bool(label.get("is_strike", True)),
+            algorithm_validated=None,
+            comment=label.get("comment"),
+        )
+    rows = [
+        r for r in await list_strike_labels(analysis_id)
+        if r["source"] == "near_player_hit" and bool(r["is_strike"])
+    ]
+    labels = [_row_to_label(r) for r in rows]
+    labels.sort(key=lambda r: r["time_s"])
+    return {"analysis_id": analysis_id, "labels": labels}

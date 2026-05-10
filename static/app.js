@@ -1,4 +1,52 @@
 // State -------------------------------------------------------------------
+async function saveToFileSystem(blob, defaultName, pickerId) {
+  if (window.showSaveFilePicker) {
+    try {
+      const options = {
+        suggestedName: defaultName,
+        types: [
+          defaultName.endsWith(".gz") 
+            ? { description: 'GZIP Files', accept: { 'application/gzip': ['.gz'] } }
+            : { description: 'JSON Files', accept: { 'application/json': ['.json'] } }
+        ],
+      };
+      if (pickerId) options.id = pickerId;
+      const handle = await window.showSaveFilePicker(options);
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return true;
+    } catch (e) {
+      if (e.name === "AbortError") return false;
+      throw e;
+    }
+  } else {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = defaultName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    return true;
+  }
+}
+
+async function loadFromFileSystem(accept) {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      resolve(file || null);
+    };
+    input.onerror = () => reject(new Error("File selection failed"));
+    input.click();
+  });
+}
+
 const state = {
   videoId: null,
   analysisId: null,
@@ -38,10 +86,8 @@ const state = {
 };
 
 // Per-detector config schemas — single source of truth for which knobs/badges
-// belong to which detector. Used by renderStartConfigControls (filters the
-// Media Pool form) and renderAnalysisConfigs (filters the pill list).
+// belong to which detector. Used by renderStartConfigControls (filters the Media Pool form).
 const _MEDIAN_FRAME_KEYS = [
-  "sample_fps", "median_bg_samples",
   "diff_threshold", "motion_threshold",
   "merge_gap_s", "enable_merge_gap",
   "min_segment_s", "enable_min_segment",
@@ -61,7 +107,7 @@ const DETECTOR_CONFIGS = {
     "pose_model", "pose_conf", "pose_imgsz", "model_name",
     "audio_sample_rate", "bandpass_low_hz", "bandpass_high_hz",
     "peak_height_mad_k", "peak_prominence_mult", "min_impact_separation_s",
-    "min_spectral_centroid_hz", "pose_window_s", "wrist_conf_min",
+    "pose_window_s", "wrist_conf_min",
     "min_wrist_velocity", "max_gap_s", "min_hits_per_rally", "rally_padding_s",
     "range_start_s", "range_end_s",
     "duration_s", "sample_count",
@@ -72,7 +118,6 @@ const DETECTOR_CONFIGS = {
     "pose_model", "pose_conf", "pose_imgsz", "model_name",
     "audio_sample_rate", "bandpass_low_hz", "bandpass_high_hz",
     "peak_height_mad_k", "peak_prominence_mult", "min_impact_separation_s",
-    "min_spectral_centroid_hz",
     "range_start_s", "range_end_s",
     "duration_s", "sample_count", "feature_window_count", "audio_impact_count",
     "detector", "detector_version",
@@ -159,12 +204,36 @@ async function refreshLibrary() {
   }
   renderLibrary(media);
   renderAnalyses(analyses);
+  
+  const pathId = window.location.pathname.replace(/^\/+/, '');
+  if (pathId && !state.analysisId) {
+    const targetA = analyses.find(a => a.analysis_id === pathId);
+    if (targetA) {
+      openAnalysis(targetA);
+      return media;
+    }
+  }
+  
   showOnly("library-section", "analyses-section");
   if (analyses.some((a) => a.status === "pending" || a.status === "analyzing")) {
     pollAnalyses();
   }
   return media;
 }
+
+window.addEventListener("popstate", () => {
+  const pathId = window.location.pathname.replace(/^\/+/, '');
+  if (pathId) {
+    const targetA = state.analyses.find(a => a.analysis_id === pathId);
+    if (targetA && targetA.analysis_id !== state.analysisId) {
+      openAnalysis(targetA);
+    }
+  } else {
+    if ($("player")) $("player").pause();
+    state.analysisId = null;
+    showOnly("library-section", "analyses-section");
+  }
+});
 
 function renderLibrary(videos) {
   const tbody = $("videos-tbody");
@@ -697,12 +766,22 @@ async function openAnalysis(a) {
   state.analysisId = a.analysis_id;
   state.duration = a.duration_s || 0;
   $("editor-title").textContent = `${a.filename} • ${a.algorithm}`;
+  
+  if (window.location.pathname !== `/${a.analysis_id}`) {
+    window.history.pushState({}, "", `/${a.analysis_id}`);
+  }
+  
   await loadEditor();
 }
 
 $("back-to-library-btn").addEventListener("click", async () => {
   $("player").pause();
-  await refreshLibrary();
+  state.analysisId = null;
+  if (window.location.pathname !== "/") {
+    window.history.pushState({}, "", "/");
+  }
+  showOnly("library-section", "analyses-section");
+  // Optional: re-poll library to refresh status if needed, or just use existing state
 });
 
 async function loadEditor() {
@@ -780,7 +859,6 @@ async function loadEditor() {
   $("player").src = state.videoUrl;
   showOnly("editor-section");
   renderKnobs();
-  renderAnalysisConfigs();
   renderAll();
   renderPosePanel();
   setupCanvas();
@@ -971,16 +1049,26 @@ const KNOB_IDS = {
   min_segment_s: "knob-min-segment",
   segment_padding_s: "knob-segment-padding",
   sample_fps: "knob-sample-fps",
+  pose_model: "knob-pose-model",
+  pose_conf: "knob-pose-conf",
+  pose_imgsz: "knob-pose-imgsz",
   median_bg_samples: "knob-median-bg-samples",
   court_weight: "knob-court-weight",
   outside_weight: "knob-outside-weight",
   near_camera_weight: "knob-near-camera-weight",
+  audio_sample_rate: "knob-audio-sample-rate",
   bandpass_low_hz: "knob-bandpass-low-hz",
   bandpass_high_hz: "knob-bandpass-high-hz",
   peak_height_mad_k: "knob-peak-height-mad-k",
   peak_prominence_mult: "knob-peak-prominence-mult",
   min_spectral_centroid_hz: "knob-min-spectral-centroid-hz",
+  min_impact_separation_s: "knob-min-impact-separation",
   min_wrist_velocity: "knob-min-wrist-velocity",
+  pose_window_s: "knob-pose-window-s",
+  wrist_conf_min: "knob-wrist-conf-min",
+  max_gap_s: "knob-max-gap-s",
+  min_hits_per_rally: "knob-min-hits-per-rally",
+  rally_padding_s: "knob-rally-padding-s",
   enable_merge_gap: "enable-merge-gap",
   enable_min_segment: "enable-min-segment",
   enable_padding: "enable-padding",
@@ -992,6 +1080,7 @@ const AUDIO_KNOB_KEYS = new Set([
   "peak_height_mad_k",
   "peak_prominence_mult",
   "min_spectral_centroid_hz",
+  "min_impact_separation_s",
   "min_wrist_velocity",
 ]);
 
@@ -1006,10 +1095,14 @@ function renderKnobs() {
     const poseAudioPreviewKnob = isPose && AUDIO_KNOB_KEYS.has(key);
     const inputDisabled = disabled || (isPose && !poseAudioPreviewKnob);
     if (el.type === "checkbox") {
-      el.checked = !!(knobs && knobs[key]);
+      if (knobs && knobs[key] !== undefined) {
+        el.checked = !!knobs[key];
+      }
       el.disabled = inputDisabled;
     } else {
-      el.value = knobs && knobs[key] !== undefined ? knobs[key] : "";
+      if (knobs && knobs[key] !== undefined) {
+        el.value = knobs[key];
+      }
       el.disabled = inputDisabled || key === "sample_fps" || key === "median_bg_samples" ||
         key === "court_weight" || key === "outside_weight" || key === "near_camera_weight";
     }
@@ -1019,6 +1112,20 @@ function renderKnobs() {
 
 function readKnobs() {
   const base = { ...(state.knobs || state.defaultKnobs || {}) };
+  // Pose knobs
+  base.sample_fps = parseFloat($("knob-sample-fps").value || base.sample_fps || 4);
+  base.pose_model = $("knob-pose-model").value || base.pose_model || "yolo11n-pose.pt";
+  base.pose_conf = parseFloat($("knob-pose-conf").value || base.pose_conf || 0.25);
+  base.pose_imgsz = parseInt($("knob-pose-imgsz").value || base.pose_imgsz || 640, 10);
+  // Audio knobs
+  base.audio_sample_rate = parseInt($("knob-audio-sample-rate").value || base.audio_sample_rate || 22050, 10);
+  base.bandpass_low_hz = parseFloat($("knob-bandpass-low-hz").value || base.bandpass_low_hz || 1000);
+  base.bandpass_high_hz = parseFloat($("knob-bandpass-high-hz").value || base.bandpass_high_hz || 8000);
+  base.peak_height_mad_k = parseFloat($("knob-peak-height-mad-k").value || base.peak_height_mad_k || 6);
+  base.peak_prominence_mult = parseFloat($("knob-peak-prominence-mult").value || base.peak_prominence_mult || 2);
+  base.min_spectral_centroid_hz = parseFloat($("knob-min-spectral-centroid-hz").value || base.min_spectral_centroid_hz || 2500);
+  base.min_impact_separation_s = parseFloat($("knob-min-impact-separation").value || base.min_impact_separation_s || 0.15);
+  // Logic knobs
   base.diff_threshold = parseInt($("knob-diff-threshold").value || base.diff_threshold || 25, 10);
   base.motion_threshold = parseFloat($("knob-motion-threshold").value || base.motion_threshold || 0.02);
   base.merge_gap_s = parseFloat($("knob-merge-gap").value || base.merge_gap_s || 0);
@@ -1030,12 +1137,12 @@ function readKnobs() {
   base.court_weight = parseFloat($("knob-court-weight").value || base.court_weight || 1);
   base.outside_weight = parseFloat($("knob-outside-weight").value || base.outside_weight || 0.15);
   base.near_camera_weight = parseFloat($("knob-near-camera-weight").value || base.near_camera_weight || 0);
-  base.bandpass_low_hz = parseFloat($("knob-bandpass-low-hz").value || base.bandpass_low_hz || 1000);
-  base.bandpass_high_hz = parseFloat($("knob-bandpass-high-hz").value || base.bandpass_high_hz || 8000);
-  base.peak_height_mad_k = parseFloat($("knob-peak-height-mad-k").value || base.peak_height_mad_k || 6);
-  base.peak_prominence_mult = parseFloat($("knob-peak-prominence-mult").value || base.peak_prominence_mult || 2);
-  base.min_spectral_centroid_hz = parseFloat($("knob-min-spectral-centroid-hz").value || base.min_spectral_centroid_hz || 2500);
   base.min_wrist_velocity = parseFloat($("knob-min-wrist-velocity").value || base.min_wrist_velocity || 0.4);
+  base.pose_window_s = parseFloat($("knob-pose-window-s").value || base.pose_window_s || 0.75);
+  base.wrist_conf_min = parseFloat($("knob-wrist-conf-min").value || base.wrist_conf_min || 0.3);
+  base.max_gap_s = parseFloat($("knob-max-gap-s").value || base.max_gap_s || 5.0);
+  base.min_hits_per_rally = parseInt($("knob-min-hits-per-rally").value || base.min_hits_per_rally || 2, 10);
+  base.rally_padding_s = parseFloat($("knob-rally-padding-s").value || base.rally_padding_s || 1.0);
   return base;
 }
 
@@ -1053,46 +1160,6 @@ function renderAnalysisSummary() {
     `(${Math.round(s.on_percent || 0)}%) • ${s.sample_count || 0} cached samples${changed}`;
 }
 
-function renderAnalysisConfigs() {
-  const root = $("analysis-configs");
-  if (!root) return;
-  root.innerHTML = "";
-  const config = {
-    ...(state.analysis && state.analysis.knobs ? state.analysis.knobs : {}),
-    ...(state.analysis && state.analysis.summary && state.analysis.summary.config ? state.analysis.summary.config : {}),
-  };
-  if (state.poseData && state.poseData.metadata) {
-    Object.assign(config, {
-      pose_model: state.poseData.metadata.model_name,
-      pose_conf: state.poseData.metadata.conf_threshold,
-      pose_imgsz: state.poseData.metadata.image_size,
-      sample_fps: state.poseData.metadata.sample_fps,
-      range_start_s: state.poseData.metadata.range_start_s,
-      range_end_s: state.poseData.metadata.range_end_s,
-    });
-  }
-  // Filter pills to only those keys the detector actually uses.
-  // Unknown detector → fall back to showing everything (forward compatible).
-  const detector =
-    (state.analysis && state.analysis.detector) ||
-    (state.analysis && state.analysis.algorithm) ||
-    config.detector;
-  const allowed = DETECTOR_CONFIGS[detector];
-  const entries = Object.entries(config)
-    .filter(([_, v]) => v !== undefined && v !== null)
-    .filter(([k]) => !allowed || allowed.includes(k));
-  if (!entries.length) {
-    root.textContent = "No saved config.";
-    return;
-  }
-  for (const [key, value] of entries) {
-    const pill = document.createElement("span");
-    pill.className = "config-pill";
-    pill.textContent = `${key}: ${typeof value === "number" ? Number(value).toFixed(key.endsWith("_s") ? 1 : 3).replace(/\.?0+$/, "") : value}`;
-    if (HELP_TEXT[key]) pill.title = HELP_TEXT[key];
-    root.appendChild(pill);
-  }
-}
 
 function renderPosePanel() {
   const panel = $("pose-panel");
@@ -1300,15 +1367,11 @@ function setupEditorResizers() {
   if (!grid || !leftHandle || !rightHandle) return;
 
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
-  const currentWidth = (name, fallback) => {
-    const value = parseFloat(getComputedStyle(grid).getPropertyValue(name));
-    return Number.isFinite(value) ? value : fallback;
-  };
   const applyWidths = (left, right) => {
     grid.style.setProperty("--editor-left-width", `${Math.round(left)}px`);
     grid.style.setProperty("--editor-right-width", `${Math.round(right)}px`);
-    localStorage.setItem("editorLeftWidth", `${Math.round(left)}`);
-    localStorage.setItem("editorRightWidth", `${Math.round(right)}`);
+    localStorage.setItem("editorLeftWidthV2", `${Math.round(left)}`);
+    localStorage.setItem("editorRightWidthV2", `${Math.round(right)}`);
   };
   const clampPair = (left, right) => {
     const rect = grid.getBoundingClientRect();
@@ -1325,19 +1388,21 @@ function setupEditorResizers() {
     return { left: nextLeft, right: nextRight };
   };
 
-  const savedLeft = parseFloat(localStorage.getItem("editorLeftWidth") || "");
-  const savedRight = parseFloat(localStorage.getItem("editorRightWidth") || "");
-  const initial = clampPair(
-    Number.isFinite(savedLeft) ? savedLeft : currentWidth("--editor-left-width", 300),
-    Number.isFinite(savedRight) ? savedRight : currentWidth("--editor-right-width", 440),
-  );
-  applyWidths(initial.left, initial.right);
+  const savedLeft = parseFloat(localStorage.getItem("editorLeftWidthV2") || "");
+  const savedRight = parseFloat(localStorage.getItem("editorRightWidthV2") || "");
+  if (Number.isFinite(savedLeft) && Number.isFinite(savedRight)) {
+    const initial = clampPair(savedLeft, savedRight);
+    applyWidths(initial.left, initial.right);
+  } else {
+    grid.style.removeProperty("--editor-left-width");
+    grid.style.removeProperty("--editor-right-width");
+  }
 
   function startDrag(which, e) {
     e.preventDefault();
     const rect = grid.getBoundingClientRect();
-    const startLeft = currentWidth("--editor-left-width", 300);
-    const startRight = currentWidth("--editor-right-width", 440);
+    const startLeft = document.querySelector(".editor-left").getBoundingClientRect().width;
+    const startRight = document.querySelector(".editor-right").getBoundingClientRect().width;
     const minLeft = 220;
     const minCenter = 360;
     const minRight = 300;
@@ -1857,7 +1922,7 @@ function nearestImpact(t) {
 let _renderingDiag = false;
 
 function renderStrikeDiagnostic() {
-  const card = $("strike-diagnostic-card");
+  const card = $("manual-labels-card");
   if (!card) return;
   card.hidden = !state.impacts.length;
   if (!state.impacts.length) return;
@@ -2300,11 +2365,12 @@ async function stopBallScan() {
 }
 
 async function saveBallScan() {
-  const out = $("hit-study-report");
+  const out = $("tracknet-summary");
   if (!state.analysisId || !state.ballScan) {
     if (out) out.textContent = "No scan data to save yet.";
     return;
   }
+  out.textContent = "Saving ball scan data to server...";
   try {
     const r = await fetch(`/hit-study/${state.analysisId}/ball-scan/save`, {
       method: "POST",
@@ -2313,24 +2379,59 @@ async function saveBallScan() {
     });
     if (!r.ok) throw new Error(await r.text());
     const data = await r.json();
-    if (out) out.textContent = `Saved scan to ${data.saved_path}`;
+    
+    out.textContent = "Choosing folder to save locally...";
+    const payload = { result: state.ballScan };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const defaultName = `${state.analysisId}.ball-scan.json`;
+    const saved = await saveToFileSystem(blob, defaultName, defaultName.split(".")[1]);
+    
+    if (saved) {
+      if (out) out.textContent = `Saved locally (${state.ballScan.candidate_count || 0} candidates)`;
+    } else {
+      if (out) out.textContent = `Ball scan data saved on server, but local save was canceled.`;
+    }
   } catch (e) {
     if (out) out.textContent = "Save scan failed: " + e.message;
   }
 }
 
 async function loadBallScan() {
-  const out = $("hit-study-report");
+  const out = $("tracknet-summary");
   if (!state.analysisId) return;
-  try {
-    const r = await fetch(`/hit-study/${state.analysisId}/ball-scan/load`);
-    if (!r.ok) throw new Error(await r.text());
-    const data = await r.json();
+  
+  const handleLoad = (data, sourceStr) => {
     state.ballScan = data.result;
     if (out) {
-      out.textContent = `Loaded scan: ${state.ballScan.candidate_count || 0} candidates, ${state.ballScan.ball_detector || "unknown"}`;
+      out.textContent = `Loaded scan ${sourceStr}: ${state.ballScan.candidate_count || 0} candidates`;
     }
     drawPoseOverlay();
+  };
+
+  const file = await loadFromFileSystem(".json");
+  if (!file) {
+    try {
+      const r = await fetch(`/hit-study/${state.analysisId}/ball-scan/load`);
+      if (!r.ok) throw new Error(await r.text());
+      handleLoad(await r.json(), "from server");
+    } catch (e) {
+      if (out) out.textContent = "Load scan failed: " + e.message;
+    }
+    return;
+  }
+  
+  try {
+    const text = await file.text();
+    const payload = JSON.parse(text);
+    
+    // optionally upload to server so it's cached
+    await fetch(`/hit-study/${state.analysisId}/ball-scan/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: "local_upload", result: payload.result }),
+    });
+    
+    handleLoad(payload, "from local file");
   } catch (e) {
     if (out) out.textContent = "Load scan failed: " + e.message;
   }
@@ -2460,12 +2561,49 @@ function replaceNearHitLabels(labels) {
 
 async function saveNearPlayerHits() {
   const out = $("hit-study-report");
-  if (out) out.textContent = "Saving marked hits...";
+  if (out) out.textContent = "Preparing save...";
   try {
     const r = await fetch(`/hit-study/${state.analysisId}/labels/save`, { method: "POST" });
     if (!r.ok) throw new Error(await r.text());
     const data = await r.json();
-    if (out) out.textContent = `Saved ${data.labels.length} marks to ${data.saved_path}`;
+    
+    const payload = {
+      analysis_id: data.analysis_id,
+      video_id: data.video_id,
+      filename: data.filename,
+      algorithm: data.algorithm,
+      saved_at: Date.now() / 1000,
+      labels: data.labels
+    };
+    
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const defaultName = `${state.analysisId}.near-player-hit-labels.json`;
+
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: defaultName,
+          types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        if (out) out.textContent = `Saved ${data.labels.length} marks locally.`;
+        return;
+      } catch (e) {
+        if (e.name === "AbortError") return;
+      }
+    }
+    
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = defaultName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    if (out) out.textContent = `Downloaded ${data.labels.length} marks.`;
   } catch (e) {
     if (out) out.textContent = "Save marks failed: " + e.message;
   }
@@ -2473,16 +2611,32 @@ async function saveNearPlayerHits() {
 
 async function loadNearPlayerHits() {
   const out = $("hit-study-report");
-  if (out) out.textContent = "Loading marked hits...";
-  try {
-    const r = await fetch(`/hit-study/${state.analysisId}/labels/load`, { method: "POST" });
-    if (!r.ok) throw new Error(await r.text());
-    const data = await r.json();
-    replaceNearHitLabels(data.labels || []);
-    if (out) out.textContent = `Loaded ${data.labels.length} marks from ${data.loaded_path}`;
-  } catch (e) {
-    if (out) out.textContent = "Load marks failed: " + e.message;
-  }
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".json";
+  
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (out) out.textContent = "Loading marked hits...";
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text);
+      
+      const r = await fetch(`/hit-study/${state.analysisId}/labels/upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
+      replaceNearHitLabels(data.labels || []);
+      if (out) out.textContent = `Loaded ${data.labels.length} marks from ${file.name}`;
+    } catch (err) {
+      if (out) out.textContent = "Load marks failed: " + err.message;
+    }
+  };
+  input.click();
 }
 
 function setSlowLabelMode(enabled) {
@@ -2765,6 +2919,407 @@ async function pollExport(exportId) {
   }
 }
 
+// --- Modular Pose Scan ---
+async function startPoseScan() {
+  if (!state.analysisId || !isHitStudy()) return;
+  const out = $("pose-scan-summary");
+  const knobs = readKnobs();
+  const { start, end } = analysisRange();
+  out.textContent = `Starting pose scan (${fmtPrecise(start)} to ${fmtPrecise(end)})...`;
+  try {
+    const r = await fetch(`/hit-study/${state.analysisId}/pose-scan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        range_start_s: start,
+        range_end_s: end,
+        sample_fps: Number(knobs.sample_fps || 4),
+        model_name: knobs.pose_model || "yolo11n-pose.pt",
+        pose_conf: Number(knobs.pose_conf || 0.25),
+        pose_imgsz: Number(knobs.pose_imgsz || 640),
+      }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    state.poseScanJobId = data.job_id;
+    pollPoseScan(data.job_id);
+  } catch (e) {
+    out.textContent = "Pose scan failed: " + e.message;
+  }
+}
+
+async function pollPoseScan(jobId) {
+  const out = $("pose-scan-summary");
+  while (state.poseScanJobId === jobId) {
+    const r = await fetch(`/hit-study/pose-scan/${jobId}`);
+    if (!r.ok) {
+      out.textContent = "Status check failed.";
+      return;
+    }
+    const job = await r.json();
+    const eta = typeof job.progress_eta_s === "number" ? ` · ETA ${fmtEta(job.progress_eta_s)}` : "";
+    out.textContent = `${job.progress_message || job.status} (${Math.round(job.progress_percent || 0)}%)${eta}`;
+    if (job.status === "done") {
+      state.poseScanJobId = null;
+      if (job.result) {
+        state.poseData = {
+          metadata: {
+            model_name: job.result.model_name,
+            conf_threshold: job.result.pose_conf,
+            image_size: job.result.pose_imgsz,
+            sample_fps: job.result.sample_fps,
+            range_start_s: job.result.range_start_s,
+            range_end_s: job.result.range_end_s,
+          },
+          frames: job.result.frames,
+          summary: job.result.summary,
+        };
+        renderPosePanel();
+        drawPoseOverlay();
+        drawTimeline();
+      }
+      out.textContent = `Pose scan done: ${job.result?.summary?.sample_count || 0} frames, ${job.result?.summary?.frames_with_poses || 0} with poses`;
+      return;
+    }
+    if (job.status === "error") {
+      state.poseScanJobId = null;
+      out.textContent = "Pose scan error: " + (job.error || "unknown");
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
+async function savePoseScan() {
+  if (!state.analysisId) return;
+  const out = $("pose-scan-summary");
+  out.textContent = "Saving pose data to server...";
+  try {
+    const r = await fetch(`/hit-study/${state.analysisId}/pose-scan/save`, { method: "POST" });
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    
+    // Now download it
+    out.textContent = "Choosing folder to save locally...";
+    const dl = await fetch(`/hit-study/${state.analysisId}/pose-scan/download`);
+    if (!dl.ok) throw new Error(await dl.text());
+    const blob = await dl.blob();
+    const defaultName = `${state.analysisId}.pose-scan.json.gz`;
+    const saved = await saveToFileSystem(blob, defaultName, defaultName.split(".")[1]);
+    
+    if (saved) {
+      out.textContent = `Saved locally (${data.frame_count || 0} frames)`;
+    } else {
+      out.textContent = `Pose data saved on server, but local save was canceled.`;
+    }
+  } catch (e) {
+    out.textContent = "Save failed: " + e.message;
+  }
+}
+
+async function loadPoseScan() {
+  if (!state.analysisId) return;
+  const out = $("pose-scan-summary");
+  out.textContent = "Loading saved pose data...";
+  try {
+    const r = await fetch(`/hit-study/${state.analysisId}/pose-scan/load`);
+    if (!r.ok) throw new Error(await r.text());
+    const payload = await r.json();
+    const result = payload.result;
+    if (result) {
+      state.poseData = {
+        metadata: {
+          model_name: result.model_name,
+          conf_threshold: result.pose_conf,
+          image_size: result.pose_imgsz,
+          sample_fps: result.sample_fps,
+          range_start_s: result.range_start_s,
+          range_end_s: result.range_end_s,
+        },
+        frames: result.frames,
+        summary: result.summary,
+      };
+      renderPosePanel();
+      drawPoseOverlay();
+      drawTimeline();
+      out.textContent = `Loaded: ${result.summary?.sample_count || 0} frames, ${result.summary?.frames_with_poses || 0} with poses`;
+    } else {
+      out.textContent = "Load returned no data.";
+    }
+  } catch (e) {
+    out.textContent = "Load failed: " + e.message;
+  }
+}
+
+// --- Modular Audio Scan ---
+async function startAudioScan() {
+  if (!state.analysisId || !isHitStudy()) return;
+  const out = $("audio-preview-summary");
+  const knobs = readKnobs();
+  const { start, end } = analysisRange();
+  out.textContent = `Starting audio scan (${fmtPrecise(start)} to ${fmtPrecise(end)})...`;
+  try {
+    const r = await fetch(`/hit-study/${state.analysisId}/audio-scan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        range_start_s: start,
+        range_end_s: end,
+        audio_sample_rate: Number(knobs.audio_sample_rate || 22050),
+        bandpass_low_hz: Number(knobs.bandpass_low_hz || 1000),
+        bandpass_high_hz: Number(knobs.bandpass_high_hz || 8000),
+        peak_height_mad_k: Number(knobs.peak_height_mad_k || 6),
+        peak_prominence_mult: Number(knobs.peak_prominence_mult || 2),
+        min_impact_separation_s: Number(knobs.min_impact_separation_s || 0.15),
+        min_spectral_centroid_hz: Number(knobs.min_spectral_centroid_hz || 0),
+      }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    state.audioScanJobId = data.job_id;
+    pollAudioScan(data.job_id);
+  } catch (e) {
+    out.textContent = "Audio scan failed: " + e.message;
+  }
+}
+
+async function pollAudioScan(jobId) {
+  const out = $("audio-preview-summary");
+  while (state.audioScanJobId === jobId) {
+    const r = await fetch(`/hit-study/audio-scan/${jobId}`);
+    if (!r.ok) {
+      out.textContent = "Status check failed.";
+      return;
+    }
+    const job = await r.json();
+    out.textContent = `${job.progress_message || job.status} (${Math.round(job.progress_percent || 0)}%)`;
+    if (job.status === "done" && job.result) {
+      state.audioScanJobId = null;
+      const impacts = job.result.impacts || [];
+      replaceImpactsInRange(job.result.range_start_s, job.result.range_end_s, impacts);
+      out.textContent = `Audio scan done: ${impacts.length} impacts (floor ${Number(job.result.noise_floor || 0).toFixed(4)})`;
+      renderStrikeNav();
+      renderStrikeDiagnostic();
+      renderStrikeStats();
+      drawTimeline();
+      return;
+    }
+    if (job.status === "error") {
+      state.audioScanJobId = null;
+      out.textContent = "Audio scan error: " + (job.error || "unknown");
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
+async function saveAudioScan() {
+  if (!state.analysisId) return;
+  const out = $("audio-preview-summary");
+  out.textContent = "Saving audio data to server...";
+  try {
+    const r = await fetch(`/hit-study/${state.analysisId}/audio-scan/save`, { method: "POST" });
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    
+    out.textContent = "Choosing folder to save locally...";
+    const dl = await fetch(`/hit-study/${state.analysisId}/audio-scan/download`);
+    if (!dl.ok) throw new Error(await dl.text());
+    const blob = await dl.blob();
+    const defaultName = `${state.analysisId}.audio-scan.json`;
+    const saved = await saveToFileSystem(blob, defaultName, defaultName.split(".")[1]);
+    
+    if (saved) {
+      out.textContent = `Saved locally (${data.impact_count || 0} impacts)`;
+    } else {
+      out.textContent = `Audio data saved on server, but local save was canceled.`;
+    }
+  } catch (e) {
+    out.textContent = "Save failed: " + e.message;
+  }
+}
+
+async function loadAudioScan() {
+  if (!state.analysisId) return;
+  const out = $("audio-preview-summary");
+  
+  const handleLoad = (payload, sourceStr) => {
+    const result = payload.result;
+    if (result) {
+      const impacts = result.impacts || [];
+      replaceImpactsInRange(result.range_start_s, result.range_end_s, impacts);
+      out.textContent = `Loaded: ${impacts.length} impacts ${sourceStr}`;
+      renderStrikeNav();
+      renderStrikeDiagnostic();
+      renderStrikeStats();
+      drawTimeline();
+    } else {
+      out.textContent = "Load returned no data.";
+    }
+  };
+
+  const file = await loadFromFileSystem(".json");
+  if (!file) {
+    out.textContent = "Loading saved audio data from server...";
+    try {
+      const r = await fetch(`/hit-study/${state.analysisId}/audio-scan/load`);
+      if (!r.ok) throw new Error(await r.text());
+      handleLoad(await r.json(), "from server");
+    } catch (e) {
+      out.textContent = "Load failed: " + e.message;
+    }
+    return;
+  }
+  
+  out.textContent = "Uploading local audio data...";
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    const r = await fetch(`/hit-study/${state.analysisId}/audio-scan/upload`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!r.ok) throw new Error(await r.text());
+    handleLoad(await r.json(), "from local file");
+  } catch (e) {
+    out.textContent = "Load failed: " + e.message;
+  }
+}
+
+function analysisRange() {
+  const range = state.audioPreviewRange || {};
+  const start = Number(range.start);
+  const end = Number(range.end);
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start + 0.05) {
+    return { start, end };
+  }
+  return { start: timelineStart(), end: timelineEnd() };
+}
+
+// Wire up pose card buttons
+$("pose-scan-btn").addEventListener("click", startPoseScan);
+$("pose-save-btn").addEventListener("click", savePoseScan);
+$("pose-load-btn").addEventListener("click", loadPoseScan);
+// Wire up audio card buttons — override previous audio-preview-run-btn handler
+$("audio-preview-run-btn").removeEventListener("click", runAudioPreview);
+$("audio-preview-run-btn").addEventListener("click", startAudioScan);
+$("audio-save-btn").addEventListener("click", saveAudioScan);
+$("audio-load-btn").addEventListener("click", loadAudioScan);
+
+// --- Card Drag and Drop ---
+function loadCardLayout() {
+  const saved = localStorage.getItem("editorCardLayout");
+  if (!saved) return;
+  try {
+    const layout = JSON.parse(saved);
+    const cols = {
+      left: document.querySelector(".editor-left"),
+      center: document.querySelector(".editor-center"),
+      right: document.querySelector(".editor-right")
+    };
+    for (const [colName, col] of Object.entries(cols)) {
+      if (!layout[colName]) continue;
+      layout[colName].forEach(id => {
+        const card = document.getElementById(id);
+        if (card) col.appendChild(card);
+      });
+    }
+  } catch (e) {
+    console.error("Failed to restore layout", e);
+  }
+}
+
+function initCardDragDrop() {
+  const cards = document.querySelectorAll(".card");
+  const columns = document.querySelectorAll(".editor-left, .editor-center, .editor-right");
+  let draggedCard = null;
+
+  // Global mouseup: clean up draggable on any card that isn't mid-drag.
+  // This replaces the per-h2 mouseleave handler which had a race condition:
+  // mouseleave fires before dragstart when the mouse exits the small h2 bounds.
+  document.addEventListener("mouseup", () => {
+    cards.forEach(card => {
+      if (card !== draggedCard) {
+        card.removeAttribute("draggable");
+      }
+    });
+  });
+
+  cards.forEach(card => {
+    if (!card.id) return;
+
+    const header = card.querySelector("h2");
+    if (header) {
+      header.style.cursor = "grab";
+      header.title = "Drag to move card";
+      header.addEventListener("mousedown", (e) => {
+        // Only trigger on primary mouse button, and not if clicking a button/input inside h2
+        if (e.button !== 0) return;
+        card.setAttribute("draggable", "true");
+      });
+    }
+
+    card.addEventListener("dragstart", (e) => {
+      draggedCard = card;
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", card.id);
+      setTimeout(() => card.style.opacity = "0.4", 0);
+      if (header) header.style.cursor = "grabbing";
+    });
+
+    card.addEventListener("dragend", () => {
+      card.removeAttribute("draggable");
+      if (draggedCard) {
+        draggedCard.style.opacity = "1";
+        if (header) header.style.cursor = "grab";
+        draggedCard = null;
+        saveCardLayout();
+      }
+    });
+  });
+
+  columns.forEach(col => {
+    col.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if (!draggedCard) return;
+      
+      const afterElement = getDragAfterElement(col, e.clientY);
+      if (afterElement == null) {
+        col.appendChild(draggedCard);
+      } else {
+        col.insertBefore(draggedCard, afterElement);
+      }
+    });
+  });
+
+  function getDragAfterElement(container, y) {
+    const draggableElements = [...container.querySelectorAll('.card:not([style*="opacity: 0.4"])')];
+    return draggableElements.reduce((closest, child) => {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      if (offset < 0 && offset > closest.offset) {
+        return { offset: offset, element: child };
+      } else {
+        return closest;
+      }
+    }, { offset: Number.NEGATIVE_INFINITY }).element;
+  }
+}
+
+function saveCardLayout() {
+  const layout = {
+    left: Array.from(document.querySelector(".editor-left").children).filter(c => c.classList.contains('card') && c.id).map(c => c.id),
+    center: Array.from(document.querySelector(".editor-center").children).filter(c => c.classList.contains('card') && c.id).map(c => c.id),
+    right: Array.from(document.querySelector(".editor-right").children).filter(c => c.classList.contains('card') && c.id).map(c => c.id),
+  };
+  localStorage.setItem("editorCardLayout", JSON.stringify(layout));
+}
+
+// Apply layout on load
+loadCardLayout();
+initCardDragDrop();
+
 // Test hooks — exposes internals to tests in tests/test_frontend_render.js.
 // Has no effect in production beyond setting a few read-only references on window.
 if (typeof window !== "undefined") {
@@ -2772,7 +3327,6 @@ if (typeof window !== "undefined") {
   window.HELP_TEXT = HELP_TEXT;
   window.state = state;
   window.renderStartConfigControls = renderStartConfigControls;
-  window.renderAnalysisConfigs = renderAnalysisConfigs;
   window.showHelpPopover = showHelpPopover;
   window.hideHelpPopover = hideHelpPopover;
   window.strikeReason = strikeReason;

@@ -48,6 +48,7 @@ function makeDom({ media = [], analyses = [], poseData = null } = {}) {
   const dom = new JSDOM(html, {
     runScripts: "outside-only",
     pretendToBeVisual: true,
+    url: "http://localhost",
   });
   const { window } = dom;
 
@@ -178,98 +179,34 @@ suite("renderStartConfigControls hides irrelevant inputs", () => {
   });
 });
 
-// ---- renderAnalysisConfigs filters pills by detector --------------------
+// ---- Card drag-drop setup -----------------------------------------------
 
-suite("renderAnalysisConfigs filters by detector and adds tooltips", () => {
-  const win = makeDom();
-
-  function pillsFor(analysis, poseData = null) {
-    win.state.analysis = analysis;
-    win.state.poseData = poseData;
-    win.renderAnalysisConfigs();
-    return Array.from(
-      win.document.querySelectorAll("#analysis-configs .config-pill")
-    );
-  }
-
-  it("pose analysis: only pose-relevant pills, with imgsz", () => {
-    const pose = pillsFor(
-      {
-        detector: "pose_skeleton_yolo",
-        knobs: {
-          sample_fps: 2,
-          pose_model: "yolo11n-pose.pt",
-          pose_conf: 0.25,
-          pose_imgsz: 640,
-          motion_threshold: 0.02, // noise that should be filtered
-          court_weight: 1, // noise
-        },
-        summary: {
-          config: {
-            detector: "pose_skeleton_yolo",
-            duration_s: 765.9,
-            sample_count: 120,
-          },
-        },
-      },
-      {
-        metadata: {
-          model_name: "yolo11n-pose.pt",
-          conf_threshold: 0.25,
-          image_size: 640,
-          sample_fps: 2,
-          range_start_s: 0,
-          range_end_s: 60,
-        },
-      },
-    );
-    const keys = pose.map((p) => p.textContent.split(":")[0]);
-    assert.ok(keys.includes("pose_imgsz"), "pose_imgsz should be visible");
-    assert.ok(keys.includes("pose_conf"));
-    assert.ok(keys.includes("pose_model"));
-    assert.ok(!keys.includes("motion_threshold"), `motion_threshold leaked: ${keys}`);
-    assert.ok(!keys.includes("court_weight"), `court_weight leaked: ${keys}`);
+suite("card drag-and-drop initialization", () => {
+  it("every card with an h2 gets cursor:grab on the h2", () => {
+    const win = makeDom();
+    const cards = win.document.querySelectorAll(".card[id]");
+    let cardsWithH2 = 0;
+    let cardsWithGrab = 0;
+    cards.forEach(card => {
+      const h2 = card.querySelector("h2");
+      if (h2) {
+        cardsWithH2++;
+        if (h2.style.cursor === "grab") cardsWithGrab++;
+      }
+    });
+    assert.ok(cardsWithH2 > 0, "should have at least one card with h2");
+    assert.strictEqual(cardsWithGrab, cardsWithH2, `only ${cardsWithGrab}/${cardsWithH2} cards have grab cursor on h2`);
   });
 
-  it("median_frame analysis: motion knobs visible, pose hidden", () => {
-    const pills = pillsFor({
-      detector: "median_frame",
-      knobs: {
-        sample_fps: 2,
-        diff_threshold: 25,
-        motion_threshold: 0.02,
-        court_weight: 1, // not in median_frame
-        pose_imgsz: 640, // not in median_frame
-      },
-      summary: { config: { detector: "median_frame" } },
+  it("h2 elements have a drag title", () => {
+    const win = makeDom();
+    const cards = win.document.querySelectorAll(".card[id]");
+    cards.forEach(card => {
+      const h2 = card.querySelector("h2");
+      if (h2) {
+        assert.ok(h2.title.length > 0, `h2 in #${card.id} has no title`);
+      }
     });
-    const keys = pills.map((p) => p.textContent.split(":")[0]);
-    assert.ok(keys.includes("motion_threshold"));
-    assert.ok(keys.includes("diff_threshold"));
-    assert.ok(!keys.includes("court_weight"));
-    assert.ok(!keys.includes("pose_imgsz"));
-  });
-
-  it("pills with help text get a title attribute", () => {
-    const pills = pillsFor({
-      detector: "median_frame",
-      knobs: { sample_fps: 2, diff_threshold: 25 },
-      summary: { config: { detector: "median_frame" } },
-    });
-    const sampleFps = pills.find((p) => p.textContent.startsWith("sample_fps"));
-    assert.ok(sampleFps, "sample_fps pill missing");
-    assert.ok(sampleFps.title.length > 0, "sample_fps pill has no title");
-  });
-
-  it("unknown detector falls back to showing everything", () => {
-    const pills = pillsFor({
-      detector: "future_detector_xyz",
-      knobs: { whatever: 1, sample_fps: 2 },
-      summary: { config: { detector: "future_detector_xyz" } },
-    });
-    const keys = pills.map((p) => p.textContent.split(":")[0]);
-    assert.ok(keys.includes("whatever"));
-    assert.ok(keys.includes("sample_fps"));
   });
 });
 
@@ -365,7 +302,7 @@ suite("renderStrikeDiagnostic shows the card and computes the nearest impact", (
     const win = makeDom();
     win.state.impacts = [];
     win.renderStrikeDiagnostic();
-    const card = win.document.getElementById("strike-diagnostic-card");
+    const card = win.document.getElementById("manual-labels-card");
     assert.ok(card.hidden, "card should be hidden when impacts empty");
   });
 
@@ -383,7 +320,7 @@ suite("renderStrikeDiagnostic shows the card and computes the nearest impact", (
       get: () => 9.7,
     });
     win.renderStrikeDiagnostic();
-    const card = win.document.getElementById("strike-diagnostic-card");
+    const card = win.document.getElementById("manual-labels-card");
     assert.ok(!card.hidden, "card should be visible");
     const text = win.document.getElementById("strike-current").textContent;
     assert.match(text, /VALIDATED/);
