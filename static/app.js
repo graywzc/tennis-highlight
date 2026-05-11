@@ -860,6 +860,14 @@ async function loadEditor() {
     }
   }
 
+  // 4. Try ball scan fallback
+  if (state.analysisId) {
+    const ballR = await fetch(`/hit-study/${state.analysisId}/ball-scan/load`).then((r) => r.ok ? r.json() : null);
+    if (ballR && ballR.result) {
+      state.ballScan = ballR.result;
+    }
+  }
+
   if (analysisR && analysisR.algorithm === "near_player_hit_study" && !state.hitStudyData) {
     state.hitStudyData = { metadata: null, summary: {}, frames: [], audio: { impacts: [] }, feature_windows: [] };
   }
@@ -929,6 +937,15 @@ function renderAll() {
   renderSummary();
   renderAnalysisSummary();
   renderPosePanel();
+  renderBallScanSummary();
+}
+
+function renderBallScanSummary(sourceStr) {
+  const el = $("tracknet-summary");
+  if (!el || !state.ballScan) return;
+  let text = `Loaded scan: ${state.ballScan.candidate_count || 0} candidates, ${state.ballScan.ball_detector || "unknown"}`;
+  if (sourceStr) text += ` (${sourceStr})`;
+  el.textContent = text;
 }
 
 function renderSummary() {
@@ -2548,9 +2565,7 @@ async function loadBallScan() {
   
   const handleLoad = (data, sourceStr) => {
     state.ballScan = data.result;
-    if (out) {
-      out.textContent = `Loaded scan ${sourceStr}: ${state.ballScan.candidate_count || 0} candidates`;
-    }
+    renderBallScanSummary(sourceStr);
     drawPoseOverlay();
   };
 
