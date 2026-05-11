@@ -68,6 +68,7 @@ const state = {
   slowLabelMode: false,
   normalPlaybackRate: 1,
   ballHeatmapEnabled: false,
+  ballDiagnosticError: false,
   ballRoiOverlayEnabled: true,
   ballDiagnostic: null,
   ballDiagnosticLoading: false,
@@ -78,6 +79,8 @@ const state = {
   defaultKnobs: null,
   expandedSegments: new Set(),
   videoUrl: null,
+  sourceFps: null,
+  posePanelVisible: true,
   playMode: "free", // "free" | "segment" | "all_on"
   segmentEndS: null, // when in segment/all_on mode, auto-pause/skip at this time
   allOnQueue: [], // remaining ON segments to play through in "all_on" mode
@@ -113,15 +116,7 @@ const DETECTOR_CONFIGS = {
     "duration_s", "sample_count",
     "detector", "detector_version",
   ],
-  near_player_hit_study: [
-    "sample_fps",
-    "pose_model", "pose_conf", "pose_imgsz", "model_name",
-    "audio_sample_rate", "bandpass_low_hz", "bandpass_high_hz",
-    "peak_height_mad_k", "peak_prominence_mult", "min_impact_separation_s",
-    "range_start_s", "range_end_s",
-    "duration_s", "sample_count", "feature_window_count", "audio_impact_count",
-    "detector", "detector_version",
-  ],
+  near_player_hit_study: [],
 };
 
 const HELP_TEXT = {
@@ -353,6 +348,24 @@ function fmtEta(seconds) {
   return `${(mins / 60).toFixed(1)}h`;
 }
 
+function fmtFpsValue(fps) {
+  const value = Number(fps);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return Math.abs(value - Math.round(value)) < 0.01 ? String(Math.round(value)) : value.toFixed(2);
+}
+
+function updateTracknetFpsUi() {
+  const fpsText = fmtFpsValue(state.sourceFps);
+  const sourceOption = $("ball-scan-source-fps-option");
+  if (sourceOption) {
+    sourceOption.textContent = fpsText ? `${fpsText} fps (source)` : "Source fps";
+  }
+  const stackFps = $("tracknet-stack-fps");
+  if (stackFps) {
+    stackFps.value = fpsText ? `${fpsText} fps` : "Source fps";
+  }
+}
+
 function updateRangeDefaults() {
   if (!state.media.length) return;
   const duration = Math.max(...state.media.map((m) => m.duration_s || 0));
@@ -423,12 +436,24 @@ async function startAnalysis(videoId) {
     alert("Could not start analysis: " + (await r.text()));
     return;
   }
+  const created = await r.json();
+  if (algorithm === "near_player_hit_study") {
+    await refreshLibrary();
+    await openAnalysis({
+      video_id: videoId,
+      analysis_id: created.analysis_id,
+      filename: media ? media.filename : "Video",
+      algorithm,
+      duration_s: media ? media.duration_s : state.duration,
+    });
+    return;
+  }
   await refreshLibrary();
   pollAnalyses();
 }
 
 function readStartConfig(algorithm) {
-  if (algorithm === "pose_skeleton_yolo" || algorithm === "near_player_hit_study") {
+  if (algorithm === "pose_skeleton_yolo") {
     return {
       pose_model: $("start-pose-model").value || "yolo11n-pose.pt",
       pose_conf: parseFloat($("start-pose-conf").value || "0.25"),
@@ -548,9 +573,6 @@ $("cancel-upload-btn").addEventListener("click", async () => {
 });
 
 $("start-algorithm").addEventListener("change", () => {
-  if ($("start-algorithm").value === "near_player_hit_study" && $("start-sample-fps").value === "2.0") {
-    $("start-sample-fps").value = "4.0";
-  }
   renderStartConfigControls();
 });
 
@@ -793,15 +815,33 @@ async function loadEditor() {
   state.duration = segR.duration_s;
   state.segments = segR.segments.map((s) => ({ ...s }));
   state.videoUrl = urlR.url;
+  state.sourceFps = Number(urlR.source_fps) || null;
   state.analysis = analysisR;
   state.poseData = null;
   state.hitStudyData = null;
+
+  // 1. Fetch main algorithm data
   if (analysisR && analysisR.metadata && analysisR.metadata.detector === "pose_skeleton_yolo") {
     state.poseData = await fetch(`/pose-data/${state.analysisId}`).then((r) => r.ok ? r.json() : null);
-  } else if (analysisR && analysisR.metadata && analysisR.metadata.detector === "near_player_hit_study") {
-    state.hitStudyData = await fetch(`/hit-study-data/${state.analysisId}`).then((r) => r.ok ? r.json() : null);
-    state.poseData = state.hitStudyData;
+  } else if (isHitStudy()) {
+    state.hitStudyData = await fetch(`/hit-study/${state.analysisId}/data`).then((r) => r.ok ? r.json() : null);
+    if (state.hitStudyData && Array.isArray(state.hitStudyData.frames) && state.hitStudyData.frames.length) {
+      state.poseData = state.hitStudyData;
+    }
   }
+
+  // 2. If no pose data yet, try modular pose scan fallback
+  if (!state.poseData && state.analysisId) {
+    const modPose = await fetch(`/hit-study/${state.analysisId}/pose-scan/load`).then((r) => r.ok ? r.json() : null);
+    if (modPose && modPose.result) {
+      state.poseData = modPose.result;
+    }
+  }
+
+  if (state.poseData) {
+    enablePoseOverlay();
+  }
+
   state.knobs = analysisR ? { ...analysisR.knobs } : null;
   state.defaultKnobs = analysisR ? { ...analysisR.defaults } : null;
   state.expandedSegments = new Set();
@@ -811,6 +851,18 @@ async function loadEditor() {
       : state.hitStudyData && state.hitStudyData.audio && Array.isArray(state.hitStudyData.audio.impacts)
       ? state.hitStudyData.audio.impacts.slice().sort((a, b) => a.time_s - b.time_s)
       : [];
+
+  // 3. Try modular audio scan fallback
+  if (!state.impacts.length && state.analysisId) {
+    const modAudio = await fetch(`/hit-study/${state.analysisId}/audio-scan/load`).then((r) => r.ok ? r.json() : null);
+    if (modAudio && modAudio.result && Array.isArray(modAudio.result.impacts)) {
+      state.impacts = modAudio.result.impacts.slice().sort((a, b) => a.time_s - b.time_s);
+    }
+  }
+
+  if (analysisR && analysisR.algorithm === "near_player_hit_study" && !state.hitStudyData) {
+    state.hitStudyData = { metadata: null, summary: {}, frames: [], audio: { impacts: [] }, feature_windows: [] };
+  }
   state.strikeLabels = {};
   state.includeRejectedInNav = false;
   state.auditionEndS = null;
@@ -818,6 +870,7 @@ async function loadEditor() {
   state.slowLabelMode = false;
   state.normalPlaybackRate = 1;
   state.ballHeatmapEnabled = false;
+  state.ballDiagnosticError = false;
   state.ballDiagnostic = null;
   state.ballDiagnosticLoading = false;
   state.ballScan = null;
@@ -826,12 +879,16 @@ async function loadEditor() {
   state.ballDiagnosticTimer = null;
   if ($("slow-label-mode-toggle")) $("slow-label-mode-toggle").checked = false;
   if ($("ball-heatmap-toggle")) $("ball-heatmap-toggle").checked = false;
+  state.ballRoiOverlayEnabled = true;
   if ($("ball-roi-overlay-toggle")) $("ball-roi-overlay-toggle").checked = true;
   if ($("ball-exclude-player-toggle")) $("ball-exclude-player-toggle").checked = true;
   if ($("ball-scan-stop-btn")) $("ball-scan-stop-btn").disabled = true;
   if ($("player")) $("player").playbackRate = 1;
   if ($("strike-include-rejected")) $("strike-include-rejected").checked = false;
-  if (state.analysisId && state.impacts.length) {
+  state.posePanelVisible = true;
+  if ($("pose-panel-toggle")) $("pose-panel-toggle").checked = true;
+  updateTracknetFpsUi();
+  if (state.analysisId) {
     try {
       const r = await fetch(`/strike-labels/${state.analysisId}`);
       if (r.ok) {
@@ -848,7 +905,7 @@ async function loadEditor() {
   renderStrikeDiagnostic();
   renderStrikeStats();
   renderHitStudyPanel();
-  setAudioPreviewRangeFromPlayer();
+  setAudioPreviewRange(timelineStart(), timelineEnd());
   state.audioPreviewReady = !!(
     state.analysis &&
     state.analysis.metadata &&
@@ -858,6 +915,7 @@ async function loadEditor() {
 
   $("player").src = state.videoUrl;
   showOnly("editor-section");
+  loadCardLayout();
   renderKnobs();
   renderAll();
   renderPosePanel();
@@ -1075,6 +1133,7 @@ const KNOB_IDS = {
 };
 
 const AUDIO_KNOB_KEYS = new Set([
+  "audio_sample_rate",
   "bandpass_low_hz",
   "bandpass_high_hz",
   "peak_height_mad_k",
@@ -1088,12 +1147,21 @@ function renderKnobs() {
   renderingKnobs = true;
   const knobs = state.knobs || state.defaultKnobs;
   const isPose = state.analysis && state.analysis.metadata && state.analysis.metadata.detector === "pose_skeleton_yolo";
-  const disabled = !knobs || !(state.analysis && state.analysis.metadata);
+  const isHitStudyWorkspace = state.analysis && state.analysis.algorithm === "near_player_hit_study";
+  const hitStudyEditableKeys = new Set([
+    "sample_fps",
+    "pose_model",
+    "pose_conf",
+    "pose_imgsz",
+    ...AUDIO_KNOB_KEYS,
+  ]);
+  const disabled = !knobs || !(state.analysis && (state.analysis.metadata || isHitStudyWorkspace));
   for (const [key, id] of Object.entries(KNOB_IDS)) {
     const el = $(id);
     if (!el) continue;
     const poseAudioPreviewKnob = isPose && AUDIO_KNOB_KEYS.has(key);
-    const inputDisabled = disabled || (isPose && !poseAudioPreviewKnob);
+    const hitStudyEditableKnob = isHitStudyWorkspace && hitStudyEditableKeys.has(key);
+    const inputDisabled = disabled || (isPose && !poseAudioPreviewKnob) || (isHitStudyWorkspace && !hitStudyEditableKnob);
     if (el.type === "checkbox") {
       if (knobs && knobs[key] !== undefined) {
         el.checked = !!knobs[key];
@@ -1103,7 +1171,7 @@ function renderKnobs() {
       if (knobs && knobs[key] !== undefined) {
         el.value = knobs[key];
       }
-      el.disabled = inputDisabled || key === "sample_fps" || key === "median_bg_samples" ||
+      el.disabled = inputDisabled || (key === "sample_fps" && !isHitStudyWorkspace) || key === "median_bg_samples" ||
         key === "court_weight" || key === "outside_weight" || key === "near_camera_weight";
     }
   }
@@ -1164,8 +1232,18 @@ function renderAnalysisSummary() {
 function renderPosePanel() {
   const panel = $("pose-panel");
   if (!panel) return;
-  if (!state.poseData) {
+  if (!state.posePanelVisible) {
     panel.hidden = true;
+    return;
+  }
+  if (!state.poseData) {
+    panel.hidden = !isHitStudy();
+    if (!panel.hidden) {
+      $("pose-summary").textContent = "No pose skeleton data loaded yet. Run YOLO Pose Scan or load saved pose data.";
+      $("pose-current").textContent = "";
+      $("pose-person-details").innerHTML = "";
+      $("pose-frames-tbody").innerHTML = "";
+    }
     drawPoseOverlay();
     return;
   }
@@ -1177,6 +1255,7 @@ function renderPosePanel() {
     `${Number(summary.avg_detections_per_frame || 0).toFixed(2)} people/frame • ` +
     `avg keypoint confidence ${summary.avg_keypoint_confidence == null ? "—" : Number(summary.avg_keypoint_confidence).toFixed(2)}`;
   renderPoseCurrent();
+  drawPoseOverlay();
 }
 
 function nearestPoseFrame(t) {
@@ -1508,14 +1587,22 @@ function drawTimeline() {
     ctx.fillRect(x, SEG_TOP, segW, SEG_BOTTOM - SEG_TOP);
   }
 
-  // Strike markers (rejected first so validated draw on top).
+  // Strike markers: raw audio candidates stay neutral until validation exists.
   if (state.impacts.length) {
     const tickW = 2;
     for (const imp of state.impacts) {
+      if (typeof imp.validated !== "boolean") continue;
       if (imp.validated) continue;
       if (imp.time_s < timelineStart() || imp.time_s > timelineEnd()) continue;
       const x = timeToTimelineX(imp.time_s, w);
       ctx.fillStyle = "rgba(154, 164, 173, 0.7)";
+      ctx.fillRect(x - tickW / 2, STRIKE_BAND_TOP, tickW, STRIKE_BAND_H);
+    }
+    for (const imp of state.impacts) {
+      if (typeof imp.validated === "boolean") continue;
+      if (imp.time_s < timelineStart() || imp.time_s > timelineEnd()) continue;
+      const x = timeToTimelineX(imp.time_s, w);
+      ctx.fillStyle = "#0969da";
       ctx.fillRect(x - tickW / 2, STRIKE_BAND_TOP, tickW, STRIKE_BAND_H);
     }
     for (const imp of state.impacts) {
@@ -1747,10 +1834,16 @@ const POSE_EDGES = [
   [0, 1], [0, 2], [1, 3], [2, 4],
 ];
 
+function enablePoseOverlay() {
+  const toggle = $("pose-overlay-toggle");
+  if (toggle) toggle.checked = true;
+}
+
 function drawPoseOverlay() {
   const canvas = $("pose-overlay");
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
+  if (!ctx) return;
   const video = $("player");
   const rect = video.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
@@ -1919,23 +2012,39 @@ function nearestImpact(t) {
   return best;
 }
 
+function nearestValidatableImpact(t) {
+  const impacts = state.impacts.filter((imp) => typeof imp.validated === "boolean");
+  if (!impacts.length) return null;
+  let best = null;
+  let bestDist = Infinity;
+  for (let i = 0; i < impacts.length; i++) {
+    const d = Math.abs(impacts[i].time_s - t);
+    if (d < bestDist) { bestDist = d; best = { imp: impacts[i], idx: i, dist: d, total: impacts.length }; }
+  }
+  return best;
+}
+
+function hasCandidateValidationResults() {
+  return state.impacts.some((imp) => typeof imp.validated === "boolean");
+}
+
 let _renderingDiag = false;
 
 function renderStrikeDiagnostic() {
-  const card = $("manual-labels-card");
+  const card = $("candidate-validation-card");
   if (!card) return;
-  card.hidden = !state.impacts.length;
-  if (!state.impacts.length) return;
+  card.hidden = !state.impacts.length || !hasCandidateValidationResults();
+  if (card.hidden) return;
 
   const root = $("strike-current");
   const player = $("player");
   const t = player ? player.currentTime || 0 : 0;
-  const found = nearestImpact(t);
+  const found = nearestValidatableImpact(t);
   if (!found || found.dist > 2.0) {
     root.innerHTML = `<div class="strike-empty">No candidate near ${fmtPrecise(t)} — use Prev/Next or seek the timeline to step through strikes.</div>`;
     return;
   }
-  const { imp, idx } = found;
+  const { imp, idx, total } = found;
   const knobs = (state.poseData && state.poseData.rally && state.poseData.rally.knobs) || {};
   const lbl = state.strikeLabels[labelKey("candidate", imp.time_s)] || null;
   const algo = !!imp.validated;
@@ -1949,7 +2058,7 @@ function renderStrikeDiagnostic() {
   _renderingDiag = true;
   root.innerHTML = `
     <div class="strike-header">
-      Candidate at ${fmtPrecise(imp.time_s)} (${idx + 1}/${state.impacts.length}) —
+      Candidate at ${fmtPrecise(imp.time_s)} (${idx + 1}/${total}) —
       <span class="${algo ? "strike-status-on" : "strike-status-off"}">${algo ? "VALIDATED" : "REJECTED"}</span>
     </div>
     <div class="strike-reason">${escapeHtml(strikeReason(imp, knobs))}</div>
@@ -2086,10 +2195,18 @@ function renderStrikeStats() {
 }
 
 function isHitStudy() {
-  return !!(state.analysis && state.analysis.metadata && state.analysis.metadata.detector === "near_player_hit_study");
+  return !!(
+    state.analysis &&
+    (
+      state.analysis.algorithm === "near_player_hit_study" ||
+      (state.analysis.metadata && state.analysis.metadata.detector === "near_player_hit_study")
+    )
+  );
 }
 
 function renderHitStudyPanel() {
+  const manualCard = $("manual-labels-card");
+  if (manualCard) manualCard.hidden = !isHitStudy();
   const block = $("hit-study-block");
   if (!block) return;
   block.hidden = !isHitStudy();
@@ -2180,9 +2297,11 @@ async function runBallDiagnostic() {
   out.textContent = `Scanning ball motion around ${fmtPrecise(timeS)}...`;
   try {
     const data = await fetchBallDiagnostic(timeS);
+    state.ballDiagnosticError = false;
     renderBallDiagnosticReport(data);
     drawPoseOverlay();
   } catch (e) {
+    state.ballDiagnosticError = true;
     out.textContent = "Ball diagnostic failed: " + e.message;
   }
 }
@@ -2192,12 +2311,13 @@ function ballRoiParams() {
   const height = parseFloat($("ball-roi-height") ? $("ball-roi-height").value || "1" : "1");
   const threshold = parseFloat($("ball-diff-threshold") ? $("ball-diff-threshold").value || "12" : "12");
   return {
-    ball_detector: $("ball-detector-mode") ? $("ball-detector-mode").value : "motion",
+    ball_detector: "tracknet",
     roi_mode: $("ball-roi-mode") ? $("ball-roi-mode").value : "near_player",
-    scan_mode: $("ball-scan-mode") ? $("ball-scan-mode").value : "marked_hits",
+    scan_range: $("ball-scan-range") ? $("ball-scan-range").value : "analysis_range",
+    scan_target: $("ball-scan-target") ? $("ball-scan-target").value : "audio_candidates",
     mark_before_s: parseFloat($("ball-scan-before") ? $("ball-scan-before").value || "1" : "1"),
     mark_after_s: parseFloat($("ball-scan-after") ? $("ball-scan-after").value || "1" : "1"),
-    scan_fps: $("ball-scan-fps") ? $("ball-scan-fps").value : "2",
+    scan_fps: $("ball-scan-fps") ? $("ball-scan-fps").value : "15",
     tracknet_width: parseInt($("tracknet-width") ? $("tracknet-width").value || "640" : "640", 10),
     tracknet_height: parseInt($("tracknet-height") ? $("tracknet-height").value || "360" : "360", 10),
     tracknet_stack_frames: 3,
@@ -2256,7 +2376,7 @@ function renderBallDiagnosticReport(data) {
   }).join("");
   out.innerHTML = `
     <div class="muted">
-      ${data.ball_detector === "tracknet" ? "TrackNet" : "Motion"} heatmap centered at ${escapeHtml(fmtPrecise(data.time_s))} · ${Number(data.fps || 0).toFixed(1)} fps ·
+      TrackNet heatmap centered at ${escapeHtml(fmtPrecise(data.time_s))} · ${Number(data.fps || 0).toFixed(1)} fps ·
       ${data.candidate_count || 0} small fast blobs (${data.before_count || 0} before, ${data.after_count || 0} after) ·
       ${data.roi_mode === "full_frame" ? "whole screen ROI" : "near-player ROI"} ·
       ${data.exclude_player ? "player masked" : "player included"} · threshold ${Number(data.diff_threshold || 0).toFixed(0)}
@@ -2280,17 +2400,26 @@ async function startBallScan() {
   const scanRange = ballScanRange();
   const start = scanRange.start;
   const end = scanRange.end;
+  const targetTimes = ballScanTargetTimes(params.scan_target, start, end);
+  if (!targetTimes.length) {
+    const targetLabel = params.scan_target === "marked_hits" ? "marked hits" : "audio candidates";
+    const msg = `No ${targetLabel} inside ${scanRange.label}.`;
+    if (out) out.textContent = msg;
+    $("ball-scan-progress-text").textContent = msg;
+    return;
+  }
   $("ball-scan-progress").hidden = false;
   $("ball-scan-progress-bar").value = 0;
-  $("ball-scan-progress-text").textContent = `Queued ${scanRange.label} ${fmtPrecise(start)} to ${fmtPrecise(end)}`;
+  $("ball-scan-progress-text").textContent = `Queued ${targetTimes.length} targets in ${scanRange.label}`;
   $("ball-scan-stop-btn").disabled = false;
-  if (out) out.textContent = `Scanning ROI over ${scanRange.label} from ${fmtPrecise(start)} to ${fmtPrecise(end)}...`;
+  if (out) out.textContent = `Scanning ${targetTimes.length} targets in ${scanRange.label} from ${fmtPrecise(start)} to ${fmtPrecise(end)}...`;
   const r = await fetch(`/hit-study/${state.analysisId}/ball-scan`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       range_start_s: start,
       range_end_s: end,
+      target_times_s: targetTimes,
       ...params,
     }),
   });
@@ -2306,13 +2435,30 @@ async function startBallScan() {
 }
 
 function ballScanRange() {
+  const selected = $("ball-scan-range") ? $("ball-scan-range").value : "analysis_range";
+  if (selected === "full_range") {
+    return { start: 0, end: state.duration || timelineEnd(), label: "full range" };
+  }
   const range = state.audioPreviewRange || {};
   const start = Number(range.start);
   const end = Number(range.end);
   if (Number.isFinite(start) && Number.isFinite(end) && end > start + 0.05) {
-    return { start, end, label: "audio range" };
+    return { start, end, label: "analysis range" };
   }
-  return { start: timelineStart(), end: timelineEnd(), label: "timeline view" };
+  return { start: timelineStart(), end: timelineEnd(), label: "analysis range" };
+}
+
+function ballScanTargetTimes(scanTarget, start, end) {
+  const times = scanTarget === "marked_hits"
+    ? Object.values(state.strikeLabels)
+        .filter((label) => label.source === "near_player_hit" && label.is_strike)
+        .map((label) => Number(label.time_s))
+    : state.impacts.map((impact) => Number(impact.time_s));
+  return Array.from(new Set(
+    times
+      .filter((time) => Number.isFinite(time) && time >= start && time <= end)
+      .map((time) => Number(time.toFixed(3)))
+  )).sort((a, b) => a - b);
 }
 
 async function pollBallScan(jobId) {
@@ -2438,7 +2584,7 @@ async function loadBallScan() {
 }
 
 function scheduleBallDiagnostic() {
-  if (!state.ballHeatmapEnabled || state.ballDiagnosticLoading || !state.analysisId || !isHitStudy()) return;
+  if (!state.ballHeatmapEnabled || state.ballDiagnosticError || state.ballDiagnosticLoading || !state.analysisId || !isHitStudy()) return;
   clearTimeout(state.ballDiagnosticTimer);
   state.ballDiagnosticTimer = setTimeout(() => {
     const player = $("player");
@@ -2559,23 +2705,31 @@ function replaceNearHitLabels(labels) {
   drawTimeline();
 }
 
+function nearPlayerHitExportPayload() {
+  const labels = Object.values(state.strikeLabels)
+    .filter((label) => label.source === "near_player_hit" && label.is_strike)
+    .sort((a, b) => a.time_s - b.time_s)
+    .map((label) => ({
+      time_s: Number(label.time_s),
+      source: "near_player_hit",
+      is_strike: true,
+      comment: label.comment || null,
+    }));
+  return {
+    analysis_id: state.analysisId,
+    video_id: state.videoId,
+    filename: state.analysis ? state.analysis.filename : null,
+    algorithm: "near_player_hit_study",
+    saved_at: Date.now() / 1000,
+    labels,
+  };
+}
+
 async function saveNearPlayerHits() {
   const out = $("hit-study-report");
-  if (out) out.textContent = "Preparing save...";
+  if (out) out.textContent = "Preparing local save...";
   try {
-    const r = await fetch(`/hit-study/${state.analysisId}/labels/save`, { method: "POST" });
-    if (!r.ok) throw new Error(await r.text());
-    const data = await r.json();
-    
-    const payload = {
-      analysis_id: data.analysis_id,
-      video_id: data.video_id,
-      filename: data.filename,
-      algorithm: data.algorithm,
-      saved_at: Date.now() / 1000,
-      labels: data.labels
-    };
-    
+    const payload = nearPlayerHitExportPayload();
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const defaultName = `${state.analysisId}.near-player-hit-labels.json`;
 
@@ -2588,7 +2742,7 @@ async function saveNearPlayerHits() {
         const writable = await handle.createWritable();
         await writable.write(blob);
         await writable.close();
-        if (out) out.textContent = `Saved ${data.labels.length} marks locally.`;
+        if (out) out.textContent = `Saved ${payload.labels.length} marks locally.`;
         return;
       } catch (e) {
         if (e.name === "AbortError") return;
@@ -2603,7 +2757,7 @@ async function saveNearPlayerHits() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    if (out) out.textContent = `Downloaded ${data.labels.length} marks.`;
+    if (out) out.textContent = `Downloaded ${payload.labels.length} marks.`;
   } catch (e) {
     if (out) out.textContent = "Save marks failed: " + e.message;
   }
@@ -2797,6 +2951,7 @@ $("ball-scan-save-btn").addEventListener("click", saveBallScan);
 $("ball-scan-load-btn").addEventListener("click", loadBallScan);
 $("ball-heatmap-toggle").addEventListener("change", (e) => {
   state.ballHeatmapEnabled = !!e.target.checked;
+  state.ballDiagnosticError = false;
   if (state.ballHeatmapEnabled) scheduleBallDiagnostic();
   drawPoseOverlay();
 });
@@ -2804,9 +2959,12 @@ $("ball-roi-overlay-toggle").addEventListener("change", (e) => {
   state.ballRoiOverlayEnabled = !!e.target.checked;
   drawPoseOverlay();
 });
-for (const id of ["ball-roi-width", "ball-roi-height", "ball-diff-threshold", "ball-exclude-player-toggle", "ball-roi-mode", "ball-detector-mode"]) {
-  $(id).addEventListener("input", () => {
+for (const id of ["ball-roi-width", "ball-roi-height", "ball-diff-threshold", "ball-exclude-player-toggle", "ball-roi-mode"]) {
+  const el = $(id);
+  if (!el) continue;
+  el.addEventListener("input", () => {
     state.ballDiagnostic = null;
+    state.ballDiagnosticError = false;
     scheduleBallDiagnostic();
     drawPoseOverlay();
   });
@@ -2974,11 +3132,13 @@ async function pollPoseScan(jobId) {
           frames: job.result.frames,
           summary: job.result.summary,
         };
+        enablePoseOverlay();
         renderPosePanel();
         drawPoseOverlay();
         drawTimeline();
       }
-      out.textContent = `Pose scan done: ${job.result?.summary?.sample_count || 0} frames, ${job.result?.summary?.frames_with_poses || 0} with poses`;
+      const remembered = await rememberPoseScanOnServer();
+      out.textContent = `Pose scan done: ${job.result?.summary?.sample_count || 0} frames, ${job.result?.summary?.frames_with_poses || 0} with poses${remembered ? " · remembered for refresh" : ""}`;
       return;
     }
     if (job.status === "error") {
@@ -3017,14 +3177,23 @@ async function savePoseScan() {
   }
 }
 
+async function rememberPoseScanOnServer() {
+  if (!state.analysisId) return false;
+  try {
+    const r = await fetch(`/hit-study/${state.analysisId}/pose-scan/save`, { method: "POST" });
+    if (!r.ok) throw new Error(await r.text());
+    return true;
+  } catch (e) {
+    console.warn("could not remember pose scan", e);
+    return false;
+  }
+}
+
 async function loadPoseScan() {
   if (!state.analysisId) return;
   const out = $("pose-scan-summary");
-  out.textContent = "Loading saved pose data...";
-  try {
-    const r = await fetch(`/hit-study/${state.analysisId}/pose-scan/load`);
-    if (!r.ok) throw new Error(await r.text());
-    const payload = await r.json();
+  
+  const handleLoad = (payload, sourceStr) => {
     const result = payload.result;
     if (result) {
       state.poseData = {
@@ -3039,13 +3208,39 @@ async function loadPoseScan() {
         frames: result.frames,
         summary: result.summary,
       };
+      enablePoseOverlay();
       renderPosePanel();
       drawPoseOverlay();
       drawTimeline();
-      out.textContent = `Loaded: ${result.summary?.sample_count || 0} frames, ${result.summary?.frames_with_poses || 0} with poses`;
+      out.textContent = `Loaded: ${result.summary?.sample_count || 0} frames, ${result.summary?.frames_with_poses || 0} with poses ${sourceStr}`;
     } else {
       out.textContent = "Load returned no data.";
     }
+  };
+
+  const file = await loadFromFileSystem(".gz,.json");
+  if (!file) {
+    out.textContent = "Loading saved pose data from server...";
+    try {
+      const r = await fetch(`/hit-study/${state.analysisId}/pose-scan/load`);
+      if (!r.ok) throw new Error(await r.text());
+      handleLoad(await r.json(), "from server");
+    } catch (e) {
+      out.textContent = "Load failed: " + e.message;
+    }
+    return;
+  }
+  
+  out.textContent = "Uploading local pose data...";
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    const r = await fetch(`/hit-study/${state.analysisId}/pose-scan/upload`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!r.ok) throw new Error(await r.text());
+    handleLoad(await r.json(), "from local file");
   } catch (e) {
     out.textContent = "Load failed: " + e.message;
   }
@@ -3071,7 +3266,7 @@ async function startAudioScan() {
         peak_height_mad_k: Number(knobs.peak_height_mad_k || 6),
         peak_prominence_mult: Number(knobs.peak_prominence_mult || 2),
         min_impact_separation_s: Number(knobs.min_impact_separation_s || 0.15),
-        min_spectral_centroid_hz: Number(knobs.min_spectral_centroid_hz || 0),
+        min_spectral_centroid_hz: Number(knobs.min_spectral_centroid_hz || 2500),
       }),
     });
     if (!r.ok) throw new Error(await r.text());
@@ -3097,7 +3292,8 @@ async function pollAudioScan(jobId) {
       state.audioScanJobId = null;
       const impacts = job.result.impacts || [];
       replaceImpactsInRange(job.result.range_start_s, job.result.range_end_s, impacts);
-      out.textContent = `Audio scan done: ${impacts.length} impacts (floor ${Number(job.result.noise_floor || 0).toFixed(4)})`;
+      const remembered = await rememberAudioScanOnServer();
+      out.textContent = `Audio scan done: ${impacts.length} impacts (floor ${Number(job.result.noise_floor || 0).toFixed(4)})${remembered ? " · remembered for refresh" : ""}`;
       renderStrikeNav();
       renderStrikeDiagnostic();
       renderStrikeStats();
@@ -3110,6 +3306,18 @@ async function pollAudioScan(jobId) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
+async function rememberAudioScanOnServer() {
+  if (!state.analysisId) return false;
+  try {
+    const r = await fetch(`/hit-study/${state.analysisId}/audio-scan/save`, { method: "POST" });
+    if (!r.ok) throw new Error(await r.text());
+    return true;
+  } catch (e) {
+    console.warn("could not remember audio scan", e);
+    return false;
   }
 }
 
@@ -3200,6 +3408,10 @@ function analysisRange() {
 $("pose-scan-btn").addEventListener("click", startPoseScan);
 $("pose-save-btn").addEventListener("click", savePoseScan);
 $("pose-load-btn").addEventListener("click", loadPoseScan);
+$("pose-panel-toggle").addEventListener("change", (e) => {
+  state.posePanelVisible = !!e.target.checked;
+  renderPosePanel();
+});
 // Wire up audio card buttons — override previous audio-preview-run-btn handler
 $("audio-preview-run-btn").removeEventListener("click", runAudioPreview);
 $("audio-preview-run-btn").addEventListener("click", startAudioScan);
@@ -3207,8 +3419,10 @@ $("audio-save-btn").addEventListener("click", saveAudioScan);
 $("audio-load-btn").addEventListener("click", loadAudioScan);
 
 // --- Card Drag and Drop ---
+const CARD_LAYOUT_KEY = "editorCardLayout";
+
 function loadCardLayout() {
-  const saved = localStorage.getItem("editorCardLayout");
+  const saved = localStorage.getItem(CARD_LAYOUT_KEY);
   if (!saved) return;
   try {
     const layout = JSON.parse(saved);
@@ -3217,11 +3431,24 @@ function loadCardLayout() {
       center: document.querySelector(".editor-center"),
       right: document.querySelector(".editor-right")
     };
+    const placed = new Set();
     for (const [colName, col] of Object.entries(cols)) {
       if (!layout[colName]) continue;
       layout[colName].forEach(id => {
         const card = document.getElementById(id);
-        if (card) col.appendChild(card);
+        if (card && col) {
+          col.appendChild(card);
+          placed.add(id);
+        }
+      });
+    }
+    for (const [colName, col] of Object.entries(cols)) {
+      if (!col) continue;
+      Array.from(col.children).forEach((child) => {
+        if (child.classList && child.classList.contains("card") && child.id && !placed.has(child.id)) {
+          col.appendChild(child);
+          placed.add(child.id);
+        }
       });
     }
   } catch (e) {
@@ -3291,6 +3518,9 @@ function initCardDragDrop() {
         col.insertBefore(draggedCard, afterElement);
       }
     });
+    col.addEventListener("drop", () => {
+      if (draggedCard) saveCardLayout();
+    });
   });
 
   function getDragAfterElement(container, y) {
@@ -3313,7 +3543,7 @@ function saveCardLayout() {
     center: Array.from(document.querySelector(".editor-center").children).filter(c => c.classList.contains('card') && c.id).map(c => c.id),
     right: Array.from(document.querySelector(".editor-right").children).filter(c => c.classList.contains('card') && c.id).map(c => c.id),
   };
-  localStorage.setItem("editorCardLayout", JSON.stringify(layout));
+  localStorage.setItem(CARD_LAYOUT_KEY, JSON.stringify(layout));
 }
 
 // Apply layout on load
@@ -3326,10 +3556,19 @@ if (typeof window !== "undefined") {
   window.DETECTOR_CONFIGS = DETECTOR_CONFIGS;
   window.HELP_TEXT = HELP_TEXT;
   window.state = state;
+  window.renderKnobs = renderKnobs;
+  window.renderPosePanel = renderPosePanel;
   window.renderStartConfigControls = renderStartConfigControls;
+  window.setAudioPreviewRange = setAudioPreviewRange;
+  window.setAudioPreviewRangeFromPlayer = setAudioPreviewRangeFromPlayer;
+  window.enablePoseOverlay = enablePoseOverlay;
+  window.ballScanTargetTimes = ballScanTargetTimes;
   window.showHelpPopover = showHelpPopover;
   window.hideHelpPopover = hideHelpPopover;
   window.strikeReason = strikeReason;
+  window.nearPlayerHitExportPayload = nearPlayerHitExportPayload;
+  window.loadCardLayout = loadCardLayout;
+  window.saveCardLayout = saveCardLayout;
   window.renderStrikeDiagnostic = renderStrikeDiagnostic;
   window.renderStrikeStats = renderStrikeStats;
   window.labelKey = labelKey;

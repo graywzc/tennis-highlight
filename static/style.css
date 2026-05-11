@@ -275,7 +275,7 @@ video {
   margin-top: 8px;
   font-size: 13px;
 }
-.legend-on, .legend-off, .legend-strike-on, .legend-strike-off, .legend-strike-disputed {
+.legend-on, .legend-off, .legend-strike-candidate, .legend-strike-on, .legend-strike-off, .legend-strike-disputed {
   display: inline-block;
   width: 16px; height: 12px;
   border-radius: 2px;
@@ -284,6 +284,7 @@ video {
 }
 .legend-on { background: #1a7f37; }
 .legend-off { background: #b1bac4; }
+.legend-strike-candidate { background: #0969da; width: 4px; }
 .legend-strike-on { background: #0a8e72; width: 4px; }
 .legend-strike-off { background: #9aa4ad; width: 4px; }
 .legend-strike-disputed { background: #d97706; width: 4px; }

@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.database import get_analysis_run, get_segments, get_segments_for_analysis, get_video, replace_segments
 from app.models import Segment, SegmentsResponse
+from app.pipeline.ffmpeg_utils import probe_video_fps
 
 router = APIRouter()
 
@@ -102,5 +103,11 @@ async def video_file_path(video_id: str) -> dict:
     video = await get_video(video_id)
     if video is None:
         raise HTTPException(404, "video not found")
-    name = Path(video["filepath"]).name
-    return {"url": f"/uploads/{name}"}
+    path = Path(video["filepath"])
+    name = path.name
+    source_fps = None
+    try:
+        source_fps = await probe_video_fps(path)
+    except Exception:
+        source_fps = None
+    return {"url": f"/uploads/{name}", "source_fps": source_fps}

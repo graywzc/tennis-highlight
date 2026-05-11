@@ -126,6 +126,7 @@ async def get_analysis(analysis_id: str) -> AnalysisResponse:
     return AnalysisResponse(
         video_id=analysis["video_id"],
         analysis_id=analysis_id,
+        algorithm=analysis["algorithm"],
         duration_s=float(analysis["duration_s"]),
         defaults=_knobs_model(defaults),
         knobs=_knobs_model(knobs),

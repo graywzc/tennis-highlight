@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.database import get_analysis_run
-from app.pipeline.near_player_hit_study import HIT_STUDY_ALGORITHM, load_hit_study_artifact
+from app.pipeline.near_player_hit_study import load_hit_study_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ class AudioScanRequest(BaseModel):
     peak_height_mad_k: float = 6.0
     peak_prominence_mult: float = 2.0
     min_impact_separation_s: float = 0.15
-    min_spectral_centroid_hz: float = 0.0
+    min_spectral_centroid_hz: float = 2500.0
 
 
 # ---------------------------------------------------------------------------
@@ -79,12 +79,12 @@ def _audio_artifact_path(analysis_id: str) -> Path:
 
 
 async def _get_hit_study(analysis_id: str):
-    """Common validation: analysis must exist and be a hit study."""
+    """Common validation: analysis must exist."""
     analysis = await get_analysis_run(analysis_id)
     if analysis is None:
         raise HTTPException(404, "analysis not found")
-    if analysis["algorithm"] != HIT_STUDY_ALGORITHM:
-        raise HTTPException(400, "analysis is not a near-player hit study")
+    # We no longer strictly enforce HIT_STUDY_ALGORITHM here so modular scans
+    # can be added to any analysis (e.g. median_frame).
     return analysis
 
 
@@ -176,7 +176,7 @@ async def save_pose_scan(analysis_id: str) -> dict:
 
 @router.get("/hit-study/{analysis_id}/pose-scan/load")
 async def load_pose_scan(analysis_id: str) -> dict:
-    analysis = await _get_hit_study(analysis_id)
+    await _get_hit_study(analysis_id)
     path = _pose_artifact_path(analysis_id)
     if not path.exists():
         raise HTTPException(404, f"no saved pose scan at {path}")
@@ -185,7 +185,7 @@ async def load_pose_scan(analysis_id: str) -> dict:
 
 @router.get("/hit-study/{analysis_id}/pose-scan/download")
 async def download_pose_scan(analysis_id: str):
-    analysis = await _get_hit_study(analysis_id)
+    await _get_hit_study(analysis_id)
     path = _pose_artifact_path(analysis_id)
     if not path.exists():
         raise HTTPException(404, "no saved pose scan to download")
@@ -193,7 +193,7 @@ async def download_pose_scan(analysis_id: str):
 
 @router.post("/hit-study/{analysis_id}/pose-scan/upload")
 async def upload_pose_scan(analysis_id: str, file: UploadFile = File(...)) -> dict:
-    analysis = await _get_hit_study(analysis_id)
+    await _get_hit_study(analysis_id)
     path = _pose_artifact_path(analysis_id)
     content = await file.read()
     with open(path, "wb") as f:
@@ -379,7 +379,7 @@ async def save_audio_scan(analysis_id: str) -> dict:
 
 @router.get("/hit-study/{analysis_id}/audio-scan/load")
 async def load_audio_scan(analysis_id: str) -> dict:
-    analysis = await _get_hit_study(analysis_id)
+    await _get_hit_study(analysis_id)
     path = _audio_artifact_path(analysis_id)
     if not path.exists():
         raise HTTPException(404, f"no saved audio scan at {path}")
@@ -387,7 +387,7 @@ async def load_audio_scan(analysis_id: str) -> dict:
 
 @router.get("/hit-study/{analysis_id}/audio-scan/download")
 async def download_audio_scan(analysis_id: str):
-    analysis = await _get_hit_study(analysis_id)
+    await _get_hit_study(analysis_id)
     path = _audio_artifact_path(analysis_id)
     if not path.exists():
         raise HTTPException(404, "no saved audio scan to download")
@@ -395,7 +395,7 @@ async def download_audio_scan(analysis_id: str):
 
 @router.post("/hit-study/{analysis_id}/audio-scan/upload")
 async def upload_audio_scan(analysis_id: str, file: UploadFile = File(...)) -> dict:
-    analysis = await _get_hit_study(analysis_id)
+    await _get_hit_study(analysis_id)
     path = _audio_artifact_path(analysis_id)
     content = await file.read()
     with open(path, "wb") as f:

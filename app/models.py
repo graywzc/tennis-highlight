@@ -145,6 +145,7 @@ class AnalysisMetadata(BaseModel):
 class AnalysisResponse(BaseModel):
     video_id: str
     analysis_id: str | None = None
+    algorithm: str | None = None
     duration_s: float
     defaults: DetectorKnobs
     knobs: DetectorKnobs

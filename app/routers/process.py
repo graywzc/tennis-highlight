@@ -10,6 +10,7 @@ from app.database import (
     get_analysis_run,
     get_video,
     list_analysis_runs,
+    update_analysis_status,
 )
 from app.models import AnalysisRunSummary, DetectorKnobs
 from app.pipeline.motion_analysis import default_knobs, normalize_knobs
@@ -63,6 +64,9 @@ async def start_processing(
         range_start_s=range_start,
         range_end_s=range_end,
     )
+    if req.algorithm == HIT_STUDY_ALGORITHM:
+        await update_analysis_status(analysis_id, "done")
+        return {"video_id": video_id, "analysis_id": analysis_id, "status": "done"}
     background_tasks.add_task(run_analysis, analysis_id)
     return {"video_id": video_id, "analysis_id": analysis_id, "status": "pending"}
 

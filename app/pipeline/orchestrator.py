@@ -7,7 +7,6 @@ from pathlib import Path
 from app.database import (
     complete_analysis,
     get_analysis_run,
-    get_export,
     get_video,
     replace_segments,
     update_analysis_progress_sync,

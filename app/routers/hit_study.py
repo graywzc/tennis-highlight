@@ -1,3 +1,4 @@
+import gzip
 import json
 import threading
 import time
@@ -20,6 +21,9 @@ BALL_SCAN_JOBS: dict[str, dict] = {}
 class BallScanRequest(BaseModel):
     range_start_s: float | None = None
     range_end_s: float | None = None
+    scan_range: str = "analysis_range"
+    scan_target: str = "audio_candidates"
+    target_times_s: list[float] = []
     scan_mode: str = "range"
     mark_before_s: float = 1.0
     mark_after_s: float = 1.0
@@ -71,19 +75,15 @@ def _row_to_label(row) -> dict:
     }
 
 
-@router.get("/hit-study-data/{analysis_id}")
+@router.get("/hit-study/{analysis_id}/data")
 async def hit_study_data(analysis_id: str) -> dict:
     analysis = await get_analysis_run(analysis_id)
     if analysis is None:
         raise HTTPException(404, "analysis not found")
     if analysis["algorithm"] != HIT_STUDY_ALGORITHM:
         raise HTTPException(400, "analysis is not a near-player hit study")
-    if not analysis["artifact_path"]:
-        raise HTTPException(409, "hit study artifact is not ready")
-    path = Path(analysis["artifact_path"])
-    if not path.exists():
-        raise HTTPException(410, "hit study artifact file missing")
-    return load_hit_study_artifact(path)
+    return _load_hit_study_context(analysis)
+
 
 
 @router.post("/hit-study/{analysis_id}/evaluate")
@@ -169,18 +169,13 @@ async def hit_study_ball_diagnostic(
         raise HTTPException(404, "analysis not found")
     if analysis["algorithm"] != HIT_STUDY_ALGORITHM:
         raise HTTPException(400, "analysis is not a near-player hit study")
-    if not analysis["artifact_path"]:
-        raise HTTPException(409, "hit study artifact is not ready")
-    artifact_path = Path(analysis["artifact_path"])
-    if not artifact_path.exists():
-        raise HTTPException(410, "hit study artifact file missing")
     video_path = Path(analysis["filepath"])
     if not video_path.exists():
         raise HTTPException(410, "video file missing")
     try:
         diagnostic = ball_motion_diagnostic(
             video_path,
-            load_hit_study_artifact(artifact_path),
+            _load_hit_study_context(analysis),
             float(time_s),
             roi_expand_x=float(roi_expand_x),
             roi_expand_up=float(roi_expand_up),
@@ -207,26 +202,27 @@ async def start_ball_scan(
         raise HTTPException(404, "analysis not found")
     if analysis["algorithm"] != HIT_STUDY_ALGORITHM:
         raise HTTPException(400, "analysis is not a near-player hit study")
-    if not analysis["artifact_path"]:
-        raise HTTPException(409, "hit study artifact is not ready")
-    artifact_path = Path(analysis["artifact_path"])
-    if not artifact_path.exists():
-        raise HTTPException(410, "hit study artifact file missing")
     video_path = Path(analysis["filepath"])
     if not video_path.exists():
         raise HTTPException(410, "video file missing")
 
-    artifact = load_hit_study_artifact(artifact_path)
+    artifact = _load_hit_study_context(analysis)
     metadata = artifact.get("metadata") or {}
     analysis_start = float(metadata.get("range_start_s", 0.0))
     analysis_end = float(metadata.get("range_end_s", analysis["duration_s"]))
     start_s = max(analysis_start, float(payload.range_start_s or analysis_start))
     end_s = min(analysis_end, float(payload.range_end_s or analysis_end))
-    labels = [
-        r for r in await list_strike_labels(analysis_id)
-        if r["source"] == "near_player_hit" and bool(r["is_strike"])
+    target_times = [
+        float(t) for t in (payload.target_times_s or [])
+        if start_s <= float(t) <= end_s
     ]
-    ranges = _scan_ranges(payload, start_s, end_s, [float(r["time_s"]) for r in labels])
+    if not target_times and payload.scan_target == "marked_hits":
+        labels = [
+            r for r in await list_strike_labels(analysis_id)
+            if r["source"] == "near_player_hit" and bool(r["is_strike"])
+        ]
+        target_times = [float(r["time_s"]) for r in labels if start_s <= float(r["time_s"]) <= end_s]
+    ranges = _scan_ranges(payload, start_s, end_s, target_times)
     if not ranges:
         raise HTTPException(400, "scan range is empty")
     start_s = min(r[0] for r in ranges)
@@ -246,7 +242,7 @@ async def start_ball_scan(
     }
     thread = threading.Thread(
         target=_run_ball_scan_job,
-        args=(job_id, video_path, artifact, ranges, payload),
+        args=(job_id, video_path, artifact, ranges, target_times, payload),
         daemon=True,
     )
     thread.start()
@@ -309,14 +305,14 @@ def _run_ball_scan_job(
     video_path: Path,
     artifact: dict,
     ranges: list[tuple[float, float]],
+    target_times: list[float],
     payload: BallScanRequest,
 ) -> None:
     job = BALL_SCAN_JOBS[job_id]
     job["status"] = "running"
     detector = payload.ball_detector
     source_fps = _video_fps(video_path)
-    step_s = _scan_step_s(payload, detector, source_fps)
-    step_s = max(0.05, step_s)
+    step_s = max(0.05, _scan_step_s(payload, detector, source_fps))
     window_s = max(0.08, min(0.3, step_s * 0.75))
     centers = []
     for start_s, end_s in ranges:
@@ -324,8 +320,6 @@ def _run_ball_scan_job(
         while t <= end_s + 1e-6:
             centers.append(t)
             t += step_s
-    if not centers:
-        centers = [(ranges[0][0] + ranges[0][1]) / 2.0]
     started = time.monotonic()
     seen = set()
     candidates = []
@@ -334,7 +328,11 @@ def _run_ball_scan_job(
         "range_start_s": min(r[0] for r in ranges),
         "range_end_s": max(r[1] for r in ranges),
         "ranges": [{"start_s": r[0], "end_s": r[1]} for r in ranges],
-        "scan_mode": payload.scan_mode,
+        "target_times_s": sorted({float(t) for t in target_times}),
+        "target_count": len(set(target_times)),
+        "scan_range": payload.scan_range,
+        "scan_target": payload.scan_target,
+        "scan_mode": payload.scan_target,
         "scan_fps": payload.scan_fps,
         "scan_step_s": step_s,
         "ball_detector": detector,
@@ -415,17 +413,14 @@ def _run_ball_scan_job(
         job["progress_message"] = f"error: {e}"
 
 
-def _scan_ranges(payload: BallScanRequest, start_s: float, end_s: float, hit_times: list[float]) -> list[tuple[float, float]]:
-    if payload.scan_mode == "marked_hits":
-        before = max(0.0, float(payload.mark_before_s))
-        after = max(0.0, float(payload.mark_after_s))
-        ranges = [
-            (max(start_s, t - before), min(end_s, t + after))
-            for t in hit_times
-            if start_s <= t <= end_s
-        ]
-    else:
-        ranges = [(start_s, end_s)]
+def _scan_ranges(payload: BallScanRequest, start_s: float, end_s: float, target_times: list[float]) -> list[tuple[float, float]]:
+    before = max(0.0, float(payload.mark_before_s))
+    after = max(0.0, float(payload.mark_after_s))
+    ranges = [
+        (max(start_s, t - before), min(end_s, t + after))
+        for t in target_times
+        if start_s <= t <= end_s
+    ]
     ranges = [(a, b) for a, b in ranges if b > a]
     if not ranges:
         return []
@@ -464,6 +459,82 @@ def _ball_scan_path(analysis_id: str) -> Path:
     path = settings.analysis_dir.parent / "ball_scans"
     path.mkdir(parents=True, exist_ok=True)
     return path / f"{analysis_id}.ball-scan.json"
+
+
+def _modular_pose_scan_path(analysis_id: str) -> Path:
+    return settings.analysis_dir.parent / "modular_scans" / f"{analysis_id}.pose-scan.json.gz"
+
+
+def _modular_audio_scan_path(analysis_id: str) -> Path:
+    return settings.analysis_dir.parent / "modular_scans" / f"{analysis_id}.audio-scan.json"
+
+
+def _load_hit_study_context(analysis) -> dict:
+    pose_path = _modular_pose_scan_path(analysis["id"])
+    audio_path = _modular_audio_scan_path(analysis["id"])
+
+    # If no modular scans exist, fallback to old monolithic artifact if present
+    if not pose_path.exists() and not audio_path.exists() and analysis["artifact_path"]:
+        path = Path(analysis["artifact_path"])
+        if not path.exists():
+            raise HTTPException(410, "hit study artifact file missing")
+        return load_hit_study_artifact(path)
+
+    audio = {"impacts": []}
+    if audio_path.exists():
+        payload = json.loads(audio_path.read_text(encoding="utf-8"))
+        audio_result = payload.get("result") or payload
+        audio = {
+            "impacts": audio_result.get("impacts") or [],
+            "knobs": audio_result.get("knobs") or {},
+            "sample_rate": audio_result.get("sample_rate"),
+            "noise_floor": audio_result.get("noise_floor"),
+            "range_start_s": audio_result.get("range_start_s"),
+            "range_end_s": audio_result.get("range_end_s"),
+            "impact_count": audio_result.get("impact_count", len(audio_result.get("impacts") or [])),
+        }
+
+    if pose_path.exists():
+        with gzip.open(pose_path, "rt", encoding="utf-8") as f:
+            payload = json.load(f)
+        result = payload.get("result") or payload
+        frames = result.get("frames") or []
+        metadata = {
+            "detector": HIT_STUDY_ALGORITHM,
+            "detector_version": 1,
+            "duration_s": float(analysis["duration_s"]),
+            "range_start_s": float(result.get("range_start_s", analysis["range_start_s"] or 0.0)),
+            "range_end_s": float(result.get("range_end_s", analysis["range_end_s"] or analysis["duration_s"])),
+            "target_width": int(result.get("target_width", 640)),
+            "target_height": int(result.get("target_height", 360)),
+            "sample_fps": float(result.get("sample_fps", 4.0)),
+            "sample_count": len(frames),
+        }
+        return {
+            "metadata": metadata,
+            "summary": result.get("summary") or {},
+            "frames": frames,
+            "audio": audio,
+            "feature_windows": [],
+        }
+
+    return {
+        "metadata": {
+            "detector": HIT_STUDY_ALGORITHM,
+            "detector_version": 1,
+            "duration_s": float(analysis["duration_s"]),
+            "range_start_s": float(analysis["range_start_s"] or 0.0),
+            "range_end_s": float(analysis["range_end_s"] or analysis["duration_s"]),
+            "target_width": 640,
+            "target_height": 360,
+            "sample_fps": 4.0,
+            "sample_count": 0,
+        },
+        "summary": {},
+        "frames": [],
+        "audio": audio,
+        "feature_windows": [],
+    }
 
 
 @router.post("/hit-study/{analysis_id}/labels/save")

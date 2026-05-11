@@ -177,6 +177,110 @@ suite("renderStartConfigControls hides irrelevant inputs", () => {
     assert.ok(labels.includes("start-median-bg-samples"));
     assert.ok(labels.includes("start-sample-fps"));
   });
+
+  it("near_player_hit_study starts without library-page knobs", () => {
+    const labels = visibleLabelsFor("near_player_hit_study").map(
+      (el) => el.querySelector("input")?.id || ""
+    );
+    assert.deepStrictEqual(labels, []);
+  });
+});
+
+// ---- Hit study modular knobs --------------------------------------------
+
+suite("hit study modular knobs", () => {
+  it("allows editing audio knobs in a new lightweight hit-study workspace", () => {
+    const win = makeDom();
+    win.state.analysis = { algorithm: "near_player_hit_study", metadata: null };
+    win.state.knobs = null;
+    win.state.defaultKnobs = {
+      sample_fps: 4,
+      pose_model: "yolo11n-pose.pt",
+      pose_conf: 0.25,
+      pose_imgsz: 640,
+      audio_sample_rate: 22050,
+      bandpass_low_hz: 1000,
+      bandpass_high_hz: 8000,
+      peak_height_mad_k: 6,
+      peak_prominence_mult: 2,
+      min_spectral_centroid_hz: 2500,
+      min_impact_separation_s: 0.15,
+    };
+    win.renderKnobs();
+
+    for (const id of [
+      "knob-audio-sample-rate",
+      "knob-bandpass-low-hz",
+      "knob-bandpass-high-hz",
+      "knob-peak-height-mad-k",
+      "knob-peak-prominence-mult",
+      "knob-min-spectral-centroid-hz",
+      "knob-min-impact-separation",
+    ]) {
+      assert.equal(win.document.getElementById(id).disabled, false, `${id} should be editable`);
+    }
+  });
+});
+
+// ---- Analysis range ------------------------------------------------------
+
+suite("analysis range", () => {
+  it("can default the audio analysis range to the whole timeline", () => {
+    const win = makeDom();
+    win.state.duration = 435;
+    win.state.timelineView = { start: 0, end: null };
+    win.setAudioPreviewRange(0, win.state.duration);
+    assert.equal(win.state.audioPreviewRange.start, 0);
+    assert.equal(win.state.audioPreviewRange.end, 435);
+    assert.equal(win.document.getElementById("audio-preview-start-range").value, "0.0");
+    assert.equal(win.document.getElementById("audio-preview-end-range").value, "435.0");
+  });
+
+  it("still supports manually setting the audio range near the current player time", () => {
+    const win = makeDom();
+    win.state.duration = 435;
+    const player = win.document.getElementById("player");
+    Object.defineProperty(player, "currentTime", { value: 44, configurable: true });
+    win.setAudioPreviewRangeFromPlayer();
+    assert.equal(win.state.audioPreviewRange.start, 36);
+    assert.equal(win.state.audioPreviewRange.end, 52);
+  });
+});
+
+// ---- Pose overlay --------------------------------------------------------
+
+suite("pose overlay", () => {
+  it("keeps the pose data card visible in a new hit-study workspace", () => {
+    const win = makeDom();
+    win.state.analysis = { algorithm: "near_player_hit_study", metadata: null };
+    win.state.poseData = null;
+    win.renderPosePanel();
+    assert.equal(win.document.getElementById("pose-panel").hidden, false);
+    assert.match(win.document.getElementById("pose-summary").textContent, /No pose skeleton data/i);
+  });
+
+  it("lets the YOLO pose card hide and show the pose data card", () => {
+    const win = makeDom();
+    win.state.analysis = { algorithm: "near_player_hit_study", metadata: null };
+    const toggle = win.document.getElementById("pose-panel-toggle");
+    const panel = win.document.getElementById("pose-panel");
+    win.renderPosePanel();
+    assert.equal(panel.hidden, false);
+    toggle.checked = false;
+    toggle.dispatchEvent(new win.Event("change", { bubbles: true }));
+    assert.equal(panel.hidden, true);
+    toggle.checked = true;
+    toggle.dispatchEvent(new win.Event("change", { bubbles: true }));
+    assert.equal(panel.hidden, false);
+  });
+
+  it("can auto-enable the overlay after pose data is available", () => {
+    const win = makeDom();
+    const toggle = win.document.getElementById("pose-overlay-toggle");
+    assert.equal(toggle.checked, false);
+    win.enablePoseOverlay();
+    assert.equal(toggle.checked, true);
+  });
 });
 
 // ---- Card drag-drop setup -----------------------------------------------
@@ -207,6 +311,27 @@ suite("card drag-and-drop initialization", () => {
         assert.ok(h2.title.length > 0, `h2 in #${card.id} has no title`);
       }
     });
+  });
+
+  it("restores saved card columns and order", () => {
+    const win = makeDom();
+    win.localStorage.setItem("editorCardLayout", JSON.stringify({
+      left: ["audio-processing-card", "yolo-pose-card"],
+      center: ["candidate-validation-card", "timeline-card", "player-card"],
+      right: ["segments-card"],
+    }));
+    win.loadCardLayout();
+    const leftIds = Array.from(win.document.querySelector(".editor-left").children)
+      .filter((el) => el.classList.contains("card"))
+      .map((el) => el.id);
+    const centerIds = Array.from(win.document.querySelector(".editor-center").children)
+      .filter((el) => el.classList.contains("card"))
+      .map((el) => el.id);
+    assert.equal(leftIds[0], "audio-processing-card");
+    assert.equal(leftIds[1], "yolo-pose-card");
+    assert.equal(centerIds[0], "candidate-validation-card");
+    assert.equal(centerIds[1], "timeline-card");
+    assert.equal(centerIds[2], "player-card");
   });
 });
 
@@ -298,15 +423,25 @@ suite("strikeReason classifies impact decisions", () => {
 });
 
 suite("renderStrikeDiagnostic shows the card and computes the nearest impact", () => {
-  it("hides the card when no impacts are loaded", () => {
+  it("hides the validation card when no impacts are loaded", () => {
     const win = makeDom();
     win.state.impacts = [];
     win.renderStrikeDiagnostic();
-    const card = win.document.getElementById("manual-labels-card");
+    const card = win.document.getElementById("candidate-validation-card");
     assert.ok(card.hidden, "card should be hidden when impacts empty");
   });
 
-  it("shows the card and renders the nearest candidate", () => {
+  it("hides the validation card for raw audio-only candidates", () => {
+    const win = makeDom();
+    win.state.impacts = [
+      { time_s: 10.0, snr: 5, amplitude: 0.2 },
+    ];
+    win.renderStrikeDiagnostic();
+    const card = win.document.getElementById("candidate-validation-card");
+    assert.ok(card.hidden, "card should be hidden before candidate validation results exist");
+  });
+
+  it("shows the validation card and renders the nearest candidate", () => {
     const win = makeDom();
     win.state.impacts = [
       { time_s: 10.0, validated: true, max_wrist_v: 0.6, max_box_v: 0.1, snr: 5, amplitude: 0.2, fallback_used: false, player_id: 0 },
@@ -320,7 +455,7 @@ suite("renderStrikeDiagnostic shows the card and computes the nearest impact", (
       get: () => 9.7,
     });
     win.renderStrikeDiagnostic();
-    const card = win.document.getElementById("manual-labels-card");
+    const card = win.document.getElementById("candidate-validation-card");
     assert.ok(!card.hidden, "card should be visible");
     const text = win.document.getElementById("strike-current").textContent;
     assert.match(text, /VALIDATED/);
@@ -360,6 +495,66 @@ suite("strike stats", () => {
     assert.match(text, /false \+ve\s*1/i);  // 1 validated-but-not-a-strike
     assert.match(text, /false −ve\s*1/);    // 1 rejected-but-was-a-strike
     assert.match(text, /missed\s*1/);
+  });
+});
+
+// ---- Near-player hit export ---------------------------------------------
+
+suite("near-player hit export", () => {
+  it("uses the compact save-as schema without DB row fields", () => {
+    const win = makeDom();
+    win.state.analysisId = "analysis-1";
+    win.state.videoId = "video-1";
+    win.state.analysis = { filename: "clip.mov" };
+    win.state.strikeLabels = {
+      "near_player_hit|3.000": {
+        id: "db-id",
+        analysis_id: "analysis-1",
+        source: "near_player_hit",
+        time_s: 3,
+        is_strike: true,
+        algorithm_validated: null,
+        comment: "nice",
+        created_at: 1,
+        updated_at: 2,
+      },
+      "near_player_hit|7.000": {
+        source: "near_player_hit",
+        time_s: 7,
+        is_strike: false,
+        comment: "ignored",
+      },
+    };
+    const payload = win.nearPlayerHitExportPayload();
+    assert.equal(payload.labels.length, 1);
+    assert.deepStrictEqual(Object.keys(payload.labels[0]), ["time_s", "source", "is_strike", "comment"]);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(payload.labels[0])), {
+      time_s: 3,
+      source: "near_player_hit",
+      is_strike: true,
+      comment: "nice",
+    });
+  });
+});
+
+// ---- TrackNet target selection ------------------------------------------
+
+suite("TrackNet target selection", () => {
+  it("uses audio candidates as target times within the selected range", () => {
+    const win = makeDom();
+    win.state.impacts = [{ time_s: 2 }, { time_s: 5.1234 }, { time_s: 9 }];
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(win.ballScanTargetTimes("audio_candidates", 3, 8))), [5.123]);
+  });
+
+  it("uses marked hits as target times within the selected range", () => {
+    const win = makeDom();
+    win.state.strikeLabels = {
+      "near_player_hit|2.000": { source: "near_player_hit", time_s: 2, is_strike: true },
+      "near_player_hit|5.000": { source: "near_player_hit", time_s: 5, is_strike: true },
+      "near_player_hit|7.000": { source: "near_player_hit", time_s: 7, is_strike: false },
+      "manual|6.000": { source: "manual", time_s: 6, is_strike: true },
+    };
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(win.ballScanTargetTimes("marked_hits", 3, 8))), [5]);
   });
 });
 
