@@ -89,7 +89,7 @@ async def _get_hit_study(analysis_id: str):
         raise HTTPException(404, "analysis not found")
     # We no longer strictly enforce HIT_STUDY_ALGORITHM here so modular scans
     # can be added to any analysis (e.g. median_frame).
-    return analysis
+    return dict(analysis)
 
 
 # =========================================================================

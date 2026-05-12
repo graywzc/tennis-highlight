@@ -294,6 +294,7 @@ async def load_ball_scan(analysis_id: str) -> dict:
     analysis = await get_analysis_run(analysis_id)
     if analysis is None:
         raise HTTPException(404, "analysis not found")
+    analysis = dict(analysis)
     path = _ball_scan_path(analysis_id)
     
     if analysis.get("active_ball_scan_path"):
@@ -569,6 +570,7 @@ async def load_hit_labels_from_active(analysis_id: str) -> dict:
     analysis = await get_analysis_run(analysis_id)
     if analysis is None:
         raise HTTPException(404, "analysis not found")
+    analysis = dict(analysis)
     
     path = None
     if analysis.get("active_labels_path"):

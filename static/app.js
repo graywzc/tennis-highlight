@@ -812,6 +812,11 @@ async function loadEditor() {
   state.strikeLabels = {};
   state.audio_source_file = null;
   state.label_source_file = null;
+  state.ballScan = null;
+  state.ballScanJobId = null;
+  state.ballDiagnosticError = false;
+  state.ballDiagnostic = null;
+  state.ballDiagnosticLoading = false;
 
   const [segR, urlR, analysisR] = await Promise.all([
     fetch(`/analysis-segments/${state.analysisId}`).then((r) => r.json()),
@@ -905,11 +910,6 @@ async function loadEditor() {
   state.slowLabelMode = false;
   state.normalPlaybackRate = 1;
   state.ballHeatmapEnabled = false;
-  state.ballDiagnosticError = false;
-  state.ballDiagnostic = null;
-  state.ballDiagnosticLoading = false;
-  state.ballScan = null;
-  state.ballScanJobId = null;
   clearTimeout(state.ballDiagnosticTimer);
   state.ballDiagnosticTimer = null;
   if ($("slow-label-mode-toggle")) $("slow-label-mode-toggle").checked = false;
