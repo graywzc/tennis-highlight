@@ -70,11 +70,15 @@ def _artifacts_dir() -> Path:
     return d
 
 
-def _pose_artifact_path(analysis_id: str) -> Path:
+def _pose_artifact_path(analysis_id: str, filename: str | None = None) -> Path:
+    if filename:
+        return _artifacts_dir() / filename
     return _artifacts_dir() / f"{analysis_id}.pose-scan.json.gz"
 
 
-def _audio_artifact_path(analysis_id: str) -> Path:
+def _audio_artifact_path(analysis_id: str, filename: str | None = None) -> Path:
+    if filename:
+        return _artifacts_dir() / filename
     return _artifacts_dir() / f"{analysis_id}.audio-scan.json"
 
 
@@ -134,7 +138,7 @@ async def pose_scan_status(job_id: str) -> dict:
 
 
 @router.post("/hit-study/{analysis_id}/pose-scan/save")
-async def save_pose_scan(analysis_id: str) -> dict:
+async def save_pose_scan(analysis_id: str, filename: str | None = None) -> dict:
     """Save the most recent pose scan result for this analysis."""
     analysis = await _get_hit_study(analysis_id)
     # Find the latest completed job for this analysis
@@ -164,20 +168,30 @@ async def save_pose_scan(analysis_id: str) -> dict:
     if not result:
         raise HTTPException(400, "no completed pose scan to save")
 
-    path = _pose_artifact_path(analysis_id)
+    path = _pose_artifact_path(analysis_id, filename)
     with gzip.open(path, "wt", encoding="utf-8") as f:
         json.dump({
             "analysis_id": analysis_id,
             "saved_at": time.time(),
             "result": result,
         }, f)
+    
+    from app.database import update_analysis_modular_paths
+    await update_analysis_modular_paths(analysis_id, pose_path=str(path))
+    
     return {"analysis_id": analysis_id, "saved_path": str(path), "frame_count": len(result.get("frames", []))}
 
 
 @router.get("/hit-study/{analysis_id}/pose-scan/load")
 async def load_pose_scan(analysis_id: str) -> dict:
-    await _get_hit_study(analysis_id)
+    analysis = await _get_hit_study(analysis_id)
     path = _pose_artifact_path(analysis_id)
+    
+    if analysis.get("active_pose_scan_path"):
+        p = Path(analysis["active_pose_scan_path"])
+        if p.exists():
+            path = p
+
     if not path.exists():
         raise HTTPException(404, f"no saved pose scan at {path}")
     with gzip.open(path, "rt", encoding="utf-8") as f:
@@ -185,19 +199,32 @@ async def load_pose_scan(analysis_id: str) -> dict:
 
 @router.get("/hit-study/{analysis_id}/pose-scan/download")
 async def download_pose_scan(analysis_id: str):
-    await _get_hit_study(analysis_id)
+    analysis = await _get_hit_study(analysis_id)
     path = _pose_artifact_path(analysis_id)
+    if analysis.get("active_pose_scan_path"):
+        p = Path(analysis["active_pose_scan_path"])
+        if p.exists():
+            path = p
+            
     if not path.exists():
         raise HTTPException(404, "no saved pose scan to download")
-    return FileResponse(path, media_type="application/gzip", filename=f"{analysis_id}.pose-scan.json.gz")
+    return FileResponse(path, media_type="application/gzip", filename=path.name)
 
 @router.post("/hit-study/{analysis_id}/pose-scan/upload")
-async def upload_pose_scan(analysis_id: str, file: UploadFile = File(...)) -> dict:
+async def upload_pose_scan(analysis_id: str, file: UploadFile = File(...), filename: str | None = None) -> dict:
     await _get_hit_study(analysis_id)
-    path = _pose_artifact_path(analysis_id)
+    target_name = filename or file.filename or f"{analysis_id}.pose-scan.json.gz"
+    if not target_name.endswith(".gz"):
+        target_name += ".gz"
+        
+    path = _artifacts_dir() / target_name
     content = await file.read()
     with open(path, "wb") as f:
         f.write(content)
+        
+    from app.database import update_analysis_modular_paths
+    await update_analysis_modular_paths(analysis_id, pose_path=str(path))
+    
     with gzip.open(path, "rt", encoding="utf-8") as f:
         return json.load(f)
 
@@ -342,7 +369,7 @@ async def audio_scan_status(job_id: str) -> dict:
 
 
 @router.post("/hit-study/{analysis_id}/audio-scan/save")
-async def save_audio_scan(analysis_id: str) -> dict:
+async def save_audio_scan(analysis_id: str, filename: str | None = None) -> dict:
     analysis = await _get_hit_study(analysis_id)
     job = _latest_job(AUDIO_SCAN_JOBS, analysis_id)
     result = job.get("result") if job else None
@@ -368,38 +395,61 @@ async def save_audio_scan(analysis_id: str) -> dict:
     if not result:
         raise HTTPException(400, "no completed audio scan to save")
 
-    path = _audio_artifact_path(analysis_id)
+    path = _audio_artifact_path(analysis_id, filename)
     path.write_text(json.dumps({
         "analysis_id": analysis_id,
         "saved_at": time.time(),
         "result": result,
     }, indent=2), encoding="utf-8")
+    
+    from app.database import update_analysis_modular_paths
+    await update_analysis_modular_paths(analysis_id, audio_path=str(path))
+    
     return {"analysis_id": analysis_id, "saved_path": str(path), "impact_count": len(result.get("impacts", []))}
 
 
 @router.get("/hit-study/{analysis_id}/audio-scan/load")
 async def load_audio_scan(analysis_id: str) -> dict:
-    await _get_hit_study(analysis_id)
+    analysis = await _get_hit_study(analysis_id)
     path = _audio_artifact_path(analysis_id)
+    
+    if analysis.get("active_audio_scan_path"):
+        p = Path(analysis["active_audio_scan_path"])
+        if p.exists():
+            path = p
+            
     if not path.exists():
         raise HTTPException(404, f"no saved audio scan at {path}")
     return json.loads(path.read_text(encoding="utf-8"))
 
 @router.get("/hit-study/{analysis_id}/audio-scan/download")
 async def download_audio_scan(analysis_id: str):
-    await _get_hit_study(analysis_id)
+    analysis = await _get_hit_study(analysis_id)
     path = _audio_artifact_path(analysis_id)
+    if analysis.get("active_audio_scan_path"):
+        p = Path(analysis["active_audio_scan_path"])
+        if p.exists():
+            path = p
+            
     if not path.exists():
         raise HTTPException(404, "no saved audio scan to download")
-    return FileResponse(path, media_type="application/json", filename=f"{analysis_id}.audio-scan.json")
+    return FileResponse(path, media_type="application/json", filename=path.name)
 
 @router.post("/hit-study/{analysis_id}/audio-scan/upload")
-async def upload_audio_scan(analysis_id: str, file: UploadFile = File(...)) -> dict:
+async def upload_audio_scan(analysis_id: str, file: UploadFile = File(...), filename: str | None = None) -> dict:
     await _get_hit_study(analysis_id)
-    path = _audio_artifact_path(analysis_id)
+    target_name = filename or file.filename or f"{analysis_id}.audio-scan.json"
+    if not target_name.endswith(".json"):
+        target_name += ".json"
+        
+    path = _artifacts_dir() / target_name
     content = await file.read()
     with open(path, "wb") as f:
         f.write(content)
+        
+    from app.database import update_analysis_modular_paths
+    await update_analysis_modular_paths(analysis_id, audio_path=str(path))
+    
     return json.loads(path.read_text(encoding="utf-8"))
 
 

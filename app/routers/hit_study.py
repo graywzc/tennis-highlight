@@ -286,6 +286,10 @@ async def save_ball_scan(analysis_id: str, payload: BallScanSaveRequest) -> dict
         "saved_at": time.time(),
         "result": result,
     }, indent=2), encoding="utf-8")
+    
+    from app.database import update_analysis_modular_paths
+    await update_analysis_modular_paths(analysis_id, ball_path=str(path))
+    
     return {"analysis_id": analysis_id, "saved_path": str(path), "result": result}
 
 
@@ -295,6 +299,12 @@ async def load_ball_scan(analysis_id: str) -> dict:
     if analysis is None:
         raise HTTPException(404, "analysis not found")
     path = _ball_scan_path(analysis_id)
+    
+    if analysis.get("active_ball_scan_path"):
+        p = Path(analysis["active_ball_scan_path"])
+        if p.exists():
+            path = p
+
     if not path.exists():
         raise HTTPException(404, f"saved scan not found at {path}")
     return json.loads(path.read_text(encoding="utf-8"))

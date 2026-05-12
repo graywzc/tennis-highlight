@@ -2533,32 +2533,36 @@ async function saveBallScan() {
     if (out) out.textContent = "No scan data to save yet.";
     return;
   }
-  out.textContent = "Saving ball scan data to server...";
+
   try {
-    const r = await fetch(`/hit-study/${state.analysisId}/ball-scan/save`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ job_id: state.ballScanJobId, result: state.ballScan }),
-    });
-    if (!r.ok) throw new Error(await r.text());
-    const data = await r.json();
-    
+    // 1. Choose folder to save locally
     out.textContent = "Choosing folder to save locally...";
     const payload = { result: state.ballScan };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const defaultName = `${state.analysisId}.ball-scan.json`;
-    const saved = await saveToFileSystem(blob, defaultName, defaultName.split(".")[1]);
-    
-    if (saved) {
-      if (out) out.textContent = `Saved locally (${state.ballScan.candidate_count || 0} candidates)`;
+    const savedLocally = await saveToFileSystem(blob, defaultName, "json");
+
+    if (savedLocally) {
+      const setAsDefault = window.confirm("Do you want to set this as the active data for this analysis? (It will be loaded automatically when you refresh this page)");
+      if (setAsDefault) {
+        out.textContent = "Updating server-side cache...";
+        const r = await fetch(`/hit-study/${state.analysisId}/ball-scan/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job_id: state.ballScanJobId, result: state.ballScan }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        out.textContent = "Saved locally and set as default.";
+      } else {
+        out.textContent = "Saved locally.";
+      }
     } else {
-      if (out) out.textContent = `Ball scan data saved on server, but local save was canceled.`;
+      out.textContent = "Local save canceled.";
     }
   } catch (e) {
     if (out) out.textContent = "Save scan failed: " + e.message;
   }
 }
-
 async function loadBallScan() {
   const out = $("tracknet-summary");
   if (!state.analysisId) return;
@@ -3152,8 +3156,7 @@ async function pollPoseScan(jobId) {
         drawPoseOverlay();
         drawTimeline();
       }
-      const remembered = await rememberPoseScanOnServer();
-      out.textContent = `Pose scan done: ${job.result?.summary?.sample_count || 0} frames, ${job.result?.summary?.frames_with_poses || 0} with poses${remembered ? " · remembered for refresh" : ""}`;
+      out.textContent = `Pose scan done: ${job.result?.summary?.sample_count || 0} frames. Click Save Data to keep it.`;
       return;
     }
     if (job.status === "error") {
@@ -3168,30 +3171,51 @@ async function pollPoseScan(jobId) {
 async function savePoseScan() {
   if (!state.analysisId) return;
   const out = $("pose-scan-summary");
-  out.textContent = "Saving pose data to server...";
+
+  if (!state.poseData) {
+    out.textContent = "No pose data to save.";
+    return;
+  }
+
   try {
-    const r = await fetch(`/hit-study/${state.analysisId}/pose-scan/save`, { method: "POST" });
-    if (!r.ok) throw new Error(await r.text());
-    const data = await r.json();
-    
-    // Now download it
+    // 1. Choose folder to save locally
     out.textContent = "Choosing folder to save locally...";
-    const dl = await fetch(`/hit-study/${state.analysisId}/pose-scan/download`);
-    if (!dl.ok) throw new Error(await dl.text());
-    const blob = await dl.blob();
-    const defaultName = `${state.analysisId}.pose-scan.json.gz`;
-    const saved = await saveToFileSystem(blob, defaultName, defaultName.split(".")[1]);
-    
-    if (saved) {
-      out.textContent = `Saved locally (${data.frame_count || 0} frames)`;
+    const payload = { 
+      analysis_id: state.analysisId,
+      saved_at: Date.now() / 1000,
+      result: state.poseData 
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const defaultName = `${state.analysisId}.pose-scan.json`; // use .json for local uncompressed if easier, or stay .gz
+
+    // Actually, let's stick to the server's download if possible to keep it compressed
+    let downloadBlob = blob;
+    try {
+      const dl = await fetch(`/hit-study/${state.analysisId}/pose-scan/download`);
+      if (dl.ok) downloadBlob = await dl.blob();
+    } catch (e) {
+      console.warn("Could not fetch server-side compressed version for local save, using JSON.");
+    }
+
+    const savedLocally = await saveToFileSystem(downloadBlob, defaultName.replace(".json", ".json.gz"), "gz");
+
+    if (savedLocally) {
+      const setAsDefault = window.confirm("Do you want to set this as the active data for this analysis? (It will be loaded automatically when you refresh this page)");
+      if (setAsDefault) {
+        out.textContent = "Updating server-side cache...";
+        const r = await fetch(`/hit-study/${state.analysisId}/pose-scan/save`, { method: "POST" });
+        if (!r.ok) throw new Error(await r.text());
+        out.textContent = "Saved locally and set as default.";
+      } else {
+        out.textContent = "Saved locally.";
+      }
     } else {
-      out.textContent = `Pose data saved on server, but local save was canceled.`;
+      out.textContent = "Local save canceled.";
     }
   } catch (e) {
     out.textContent = "Save failed: " + e.message;
   }
 }
-
 async function rememberPoseScanOnServer() {
   if (!state.analysisId) return false;
   try {
@@ -3307,8 +3331,7 @@ async function pollAudioScan(jobId) {
       state.audioScanJobId = null;
       const impacts = job.result.impacts || [];
       replaceImpactsInRange(job.result.range_start_s, job.result.range_end_s, impacts);
-      const remembered = await rememberAudioScanOnServer();
-      out.textContent = `Audio scan done: ${impacts.length} impacts (floor ${Number(job.result.noise_floor || 0).toFixed(4)})${remembered ? " · remembered for refresh" : ""}`;
+      out.textContent = `Audio scan done: ${impacts.length} impacts. Click Save Data to keep it.`;
       renderStrikeNav();
       renderStrikeDiagnostic();
       renderStrikeStats();
@@ -3339,23 +3362,51 @@ async function rememberAudioScanOnServer() {
 async function saveAudioScan() {
   if (!state.analysisId) return;
   const out = $("audio-preview-summary");
-  out.textContent = "Saving audio data to server...";
+  
+  if (!state.impacts || !state.impacts.length) {
+    out.textContent = "No audio impacts to save.";
+    return;
+  }
+
   try {
-    const r = await fetch(`/hit-study/${state.analysisId}/audio-scan/save`, { method: "POST" });
-    if (!r.ok) throw new Error(await r.text());
-    const data = await r.json();
-    
+    // 1. Choose folder to save locally
     out.textContent = "Choosing folder to save locally...";
-    const dl = await fetch(`/hit-study/${state.analysisId}/audio-scan/download`);
-    if (!dl.ok) throw new Error(await dl.text());
-    const blob = await dl.blob();
     const defaultName = `${state.analysisId}.audio-scan.json`;
-    const saved = await saveToFileSystem(blob, defaultName, defaultName.split(".")[1]);
     
-    if (saved) {
-      out.textContent = `Saved locally (${data.impact_count || 0} impacts)`;
+    let downloadBlob;
+    try {
+      const dl = await fetch(`/hit-study/${state.analysisId}/audio-scan/download`);
+      if (dl.ok) downloadBlob = await dl.blob();
+    } catch (e) {
+      console.warn("Could not fetch server-side version for local save, using state.");
+    }
+    
+    if (!downloadBlob) {
+      const payload = { 
+        analysis_id: state.analysisId,
+        saved_at: Date.now() / 1000,
+        result: { 
+          impacts: state.impacts,
+          impact_count: state.impacts.length
+        } 
+      };
+      downloadBlob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    }
+
+    const savedLocally = await saveToFileSystem(downloadBlob, defaultName, "json");
+    
+    if (savedLocally) {
+      const setAsDefault = window.confirm("Do you want to set this as the active data for this analysis? (It will be loaded automatically when you refresh this page)");
+      if (setAsDefault) {
+        out.textContent = "Updating server-side cache...";
+        const r = await fetch(`/hit-study/${state.analysisId}/audio-scan/save`, { method: "POST" });
+        if (!r.ok) throw new Error(await r.text());
+        out.textContent = "Saved locally and set as default.";
+      } else {
+        out.textContent = "Saved locally.";
+      }
     } else {
-      out.textContent = `Audio data saved on server, but local save was canceled.`;
+      out.textContent = "Local save canceled.";
     }
   } catch (e) {
     out.textContent = "Save failed: " + e.message;

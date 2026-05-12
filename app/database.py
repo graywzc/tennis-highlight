@@ -71,6 +71,9 @@ CREATE TABLE IF NOT EXISTS analyses (
     progress_eta_s REAL,
     range_start_s  REAL DEFAULT 0,
     range_end_s    REAL,
+    active_pose_scan_path TEXT,
+    active_audio_scan_path TEXT,
+    active_ball_scan_path TEXT,
     created_at      REAL NOT NULL,
     updated_at      REAL NOT NULL
 );
@@ -136,6 +139,14 @@ async def init_db() -> None:
                 conn.execute("ALTER TABLE videos ADD COLUMN analysis_id TEXT")
             if "court_calibration_json" not in cols:
                 conn.execute("ALTER TABLE videos ADD COLUMN court_calibration_json TEXT")
+            analysis_cols = {r[1] for r in conn.execute("PRAGMA table_info(analyses)").fetchall()}
+            if "active_pose_scan_path" not in analysis_cols:
+                conn.execute("ALTER TABLE analyses ADD COLUMN active_pose_scan_path TEXT")
+            if "active_audio_scan_path" not in analysis_cols:
+                conn.execute("ALTER TABLE analyses ADD COLUMN active_audio_scan_path TEXT")
+            if "active_ball_scan_path" not in analysis_cols:
+                conn.execute("ALTER TABLE analyses ADD COLUMN active_ball_scan_path TEXT")
+
             seg_cols = {r[1] for r in conn.execute("PRAGMA table_info(segments)").fetchall()}
             segment_migrations = {
                 "analysis_id": "ALTER TABLE segments ADD COLUMN analysis_id TEXT",
@@ -541,7 +552,42 @@ async def get_analysis_run(analysis_id: str):
                 """,
                 (analysis_id,),
             ).fetchone()
+
     return await asyncio.to_thread(_q)
+
+
+async def update_analysis_modular_paths(
+    analysis_id: str,
+    pose_path: str | None = None,
+    audio_path: str | None = None,
+    ball_path: str | None = None,
+) -> None:
+    fields = []
+    values = []
+    if pose_path is not None:
+        fields.append("active_pose_scan_path=?")
+        values.append(pose_path)
+    if audio_path is not None:
+        fields.append("active_audio_scan_path=?")
+        values.append(audio_path)
+    if ball_path is not None:
+        fields.append("active_ball_scan_path=?")
+        values.append(ball_path)
+
+    if not fields:
+        return
+
+    values.append(analysis_id)
+
+    def _q():
+        with _connect() as conn:
+            conn.execute(
+                f"UPDATE analyses SET {', '.join(fields)}, updated_at=? WHERE id=?",
+                (*values[:-1], _now(), values[-1]),
+            )
+            conn.commit()
+
+    await asyncio.to_thread(_q)
 
 
 async def list_analysis_runs() -> list[sqlite3.Row]:
