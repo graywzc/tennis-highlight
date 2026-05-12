@@ -115,11 +115,35 @@ class TestModularScanRouter(unittest.TestCase):
                 {"time_s": 3.4, "is_strike": True}
             ]
         }
-        response = self.client.post("/hit-study/an1/labels/upload", json=payload)
+        response = self.client.post("/hit-study/an1/labels/upload?filename=custom-labels.json", json=payload)
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(len(data["labels"]), 2)
         self.assertEqual(data["labels"][0]["time_s"], 1.2)
+        self.assertEqual(data.get("source_file"), "custom-labels.json")
+
+        # Verify DB updated active_labels_path
+        with database._connect() as conn:
+            row = conn.execute("SELECT active_labels_path FROM analyses WHERE id='an1'").fetchone()
+            self.assertTrue(row[0].endswith("custom-labels.json"))
+
+    def test_save_ball_scan_active_path(self):
+        payload = {
+            "job_id": "",
+            "result": {
+                "candidates": [],
+                "candidate_count": 0,
+                "ball_detector": "tracknet"
+            }
+        }
+        response = self.client.post("/hit-study/an1/ball-scan/save", json=payload)
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify DB updated active_ball_scan_path
+        with database._connect() as conn:
+            row = conn.execute("SELECT active_ball_scan_path FROM analyses WHERE id='an1'").fetchone()
+            self.assertIsNotNone(row[0])
+            self.assertTrue(row[0].endswith("an1.ball-scan.json"))
 
 if __name__ == "__main__":
     unittest.main()
