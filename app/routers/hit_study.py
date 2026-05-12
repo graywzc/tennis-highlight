@@ -80,8 +80,7 @@ async def hit_study_data(analysis_id: str) -> dict:
     analysis = await get_analysis_run(analysis_id)
     if analysis is None:
         raise HTTPException(404, "analysis not found")
-    if analysis["algorithm"] != HIT_STUDY_ALGORITHM:
-        raise HTTPException(400, "analysis is not a near-player hit study")
+    # Allowed for any algorithm now
     return _load_hit_study_context(analysis)
 
 
@@ -91,8 +90,7 @@ async def evaluate_hit_study(analysis_id: str) -> dict:
     analysis = await get_analysis_run(analysis_id)
     if analysis is None:
         raise HTTPException(404, "analysis not found")
-    if analysis["algorithm"] != HIT_STUDY_ALGORITHM:
-        raise HTTPException(400, "analysis is not a near-player hit study")
+    # Allowed for any algorithm now
     artifact = load_hit_study_artifact(Path(analysis["artifact_path"]))
     labels = [
         r for r in await list_strike_labels(analysis_id)
@@ -167,8 +165,7 @@ async def hit_study_ball_diagnostic(
     analysis = await get_analysis_run(analysis_id)
     if analysis is None:
         raise HTTPException(404, "analysis not found")
-    if analysis["algorithm"] != HIT_STUDY_ALGORITHM:
-        raise HTTPException(400, "analysis is not a near-player hit study")
+    # Allowed for any algorithm now
     video_path = Path(analysis["filepath"])
     if not video_path.exists():
         raise HTTPException(410, "video file missing")
@@ -200,8 +197,7 @@ async def start_ball_scan(
     analysis = await get_analysis_run(analysis_id)
     if analysis is None:
         raise HTTPException(404, "analysis not found")
-    if analysis["algorithm"] != HIT_STUDY_ALGORITHM:
-        raise HTTPException(400, "analysis is not a near-player hit study")
+    # Allowed for any algorithm now
     video_path = Path(analysis["filepath"])
     if not video_path.exists():
         raise HTTPException(410, "video file missing")
@@ -573,8 +569,7 @@ async def save_hit_labels(analysis_id: str, filename: str | None = None) -> dict
     analysis = await get_analysis_run(analysis_id)
     if analysis is None:
         raise HTTPException(404, "analysis not found")
-    if analysis["algorithm"] != HIT_STUDY_ALGORITHM:
-        raise HTTPException(400, "analysis is not a near-player hit study")
+    # Allowed for any algorithm now
     rows = [
         r for r in await list_strike_labels(analysis_id)
         if r["source"] == "near_player_hit" and bool(r["is_strike"])
@@ -607,8 +602,7 @@ async def load_hit_labels(analysis_id: str, filename: str | None = None) -> dict
     analysis = await get_analysis_run(analysis_id)
     if analysis is None:
         raise HTTPException(404, "analysis not found")
-    if analysis["algorithm"] != HIT_STUDY_ALGORITHM:
-        raise HTTPException(400, "analysis is not a near-player hit study")
+    # Allowed for any algorithm now
     path = _label_path(analysis_id, filename)
     if not path.exists():
         raise HTTPException(404, f"saved labels not found at {path}")
@@ -647,8 +641,7 @@ async def upload_hit_labels(analysis_id: str, payload: dict) -> dict:
     analysis = await get_analysis_run(analysis_id)
     if analysis is None:
         raise HTTPException(404, "analysis not found")
-    if analysis["algorithm"] != HIT_STUDY_ALGORITHM:
-        raise HTTPException(400, "analysis is not a near-player hit study")
+    # Allowed for any algorithm now
 
     existing = [
         r for r in await list_strike_labels(analysis_id)

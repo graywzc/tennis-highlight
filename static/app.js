@@ -2347,7 +2347,7 @@ async function evaluateHitStudy() {
 }
 
 async function runBallDiagnostic() {
-  const out = $("hit-study-report");
+  const out = $("tracknet-summary");
   const player = $("player");
   if (!out || !state.analysisId || !player) return;
   const timeS = ballDiagnosticCenterTime(player.currentTime || 0);
@@ -2615,6 +2615,9 @@ async function loadBallScan() {
   const handleLoad = (payload, sourceStr) => {
     state.ballScan = payload.result;
     const filename = payload.source_file;
+    if (state.ballScan) {
+      state.ballScan.source_file = filename;
+    }
     renderBallScanSummary(sourceStr);
     renderLoadedStatus("ball", filename);
     drawPoseOverlay();
@@ -2652,7 +2655,7 @@ async function loadBallScan() {
 }
 
 function scheduleBallDiagnostic() {
-  if (!state.ballHeatmapEnabled || state.ballDiagnosticError || state.ballDiagnosticLoading || !state.analysisId || !isHitStudy()) return;
+  if (!state.ballHeatmapEnabled || state.ballDiagnosticError || state.ballDiagnosticLoading || !state.analysisId) return;
   clearTimeout(state.ballDiagnosticTimer);
   state.ballDiagnosticTimer = setTimeout(() => {
     const player = $("player");
@@ -3303,6 +3306,7 @@ async function loadPoseScan() {
         },
         frames: result.frames,
         summary: result.summary,
+        source_file: filename,
       };
       enablePoseOverlay();
       renderPosePanel();
@@ -3491,6 +3495,7 @@ async function loadAudioScan() {
     if (result) {
       const impacts = result.impacts || [];
       replaceImpactsInRange(result.range_start_s, result.range_end_s, impacts);
+      state.audio_source_file = filename;
       renderStrikeNav();
       renderStrikeDiagnostic();
       renderStrikeStats();
