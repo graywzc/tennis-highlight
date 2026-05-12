@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS analyses (
     active_pose_scan_path TEXT,
     active_audio_scan_path TEXT,
     active_ball_scan_path TEXT,
+    active_labels_path TEXT,
     created_at      REAL NOT NULL,
     updated_at      REAL NOT NULL
 );
@@ -146,6 +147,8 @@ async def init_db() -> None:
                 conn.execute("ALTER TABLE analyses ADD COLUMN active_audio_scan_path TEXT")
             if "active_ball_scan_path" not in analysis_cols:
                 conn.execute("ALTER TABLE analyses ADD COLUMN active_ball_scan_path TEXT")
+            if "active_labels_path" not in analysis_cols:
+                conn.execute("ALTER TABLE analyses ADD COLUMN active_labels_path TEXT")
 
             seg_cols = {r[1] for r in conn.execute("PRAGMA table_info(segments)").fetchall()}
             segment_migrations = {
@@ -561,6 +564,7 @@ async def update_analysis_modular_paths(
     pose_path: str | None = None,
     audio_path: str | None = None,
     ball_path: str | None = None,
+    labels_path: str | None = None,
 ) -> None:
     fields = []
     values = []
@@ -573,6 +577,9 @@ async def update_analysis_modular_paths(
     if ball_path is not None:
         fields.append("active_ball_scan_path=?")
         values.append(ball_path)
+    if labels_path is not None:
+        fields.append("active_labels_path=?")
+        values.append(labels_path)
 
     if not fields:
         return

@@ -807,6 +807,12 @@ $("back-to-library-btn").addEventListener("click", async () => {
 });
 
 async function loadEditor() {
+  state.poseData = null;
+  state.hitStudyData = null;
+  state.strikeLabels = {};
+  state.audio_source_file = null;
+  state.label_source_file = null;
+
   const [segR, urlR, analysisR] = await Promise.all([
     fetch(`/analysis-segments/${state.analysisId}`).then((r) => r.json()),
     fetch(`/video-file/${state.videoId}`).then((r) => r.json()),
@@ -879,10 +885,20 @@ async function loadEditor() {
     }
   }
 
+  // 5. Try manual labels fallback
+  if (state.analysisId) {
+    const labR = await fetch(`/hit-study/${state.analysisId}/labels/load`).then((r) => r.ok ? r.json() : null);
+    if (labR && labR.labels) {
+      for (const lbl of labR.labels) {
+        state.strikeLabels[labelKey(lbl.source || "near_player_hit", lbl.time_s)] = lbl;
+      }
+      state.label_source_file = labR.source_file;
+    }
+  }
+
   if (analysisR && analysisR.algorithm === "near_player_hit_study" && !state.hitStudyData) {
     state.hitStudyData = { metadata: null, summary: {}, frames: [], audio: { impacts: [] }, feature_windows: [] };
   }
-  state.strikeLabels = {};
   state.includeRejectedInNav = false;
   state.auditionEndS = null;
   state.timelineView = { start: 0, end: null };
@@ -966,6 +982,10 @@ function renderAll() {
   
   if (state.ballScan && state.ballScan.source_file) {
     renderLoadedStatus("ball", state.ballScan.source_file);
+  }
+  
+  if (state.label_source_file) {
+    renderLoadedStatus("label", state.label_source_file);
   }
 }
 
@@ -2800,32 +2820,31 @@ async function saveNearPlayerHits() {
     const payload = nearPlayerHitExportPayload();
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const defaultName = `${state.analysisId}.near-player-hit-labels.json`;
-
-    if (window.showSaveFilePicker) {
-      try {
-        const handle = await window.showSaveFilePicker({
-          suggestedName: defaultName,
-          types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }],
-        });
-        const writable = await handle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        if (out) out.textContent = `Saved ${payload.labels.length} marks locally.`;
-        return;
-      } catch (e) {
-        if (e.name === "AbortError") return;
-      }
-    }
+    const savedLocally = await saveToFileSystem(blob, defaultName, "json");
     
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = defaultName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    if (out) out.textContent = `Downloaded ${payload.labels.length} marks.`;
+    if (savedLocally) {
+      const setAsDefault = window.confirm("Do you want to set this as the active marks for this analysis? (It will be loaded automatically when you refresh this page)");
+      if (setAsDefault) {
+        if (out) out.textContent = "Updating server-side cache...";
+        const r = await fetch(`/hit-study/${state.analysisId}/labels/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        if (data.saved_path) {
+          const parts = data.saved_path.split("/");
+          const filename = parts[parts.length - 1];
+          state.label_source_file = filename;
+          renderLoadedStatus("label", filename);
+        }
+        if (out) out.textContent = "Saved locally and set as default.";
+      } else {
+        if (out) out.textContent = `Saved ${payload.labels.length} marks locally.`;
+      }
+    } else {
+      if (out) out.textContent = "Local save canceled.";
+    }
   } catch (e) {
     if (out) out.textContent = "Save marks failed: " + e.message;
   }
@@ -2833,32 +2852,45 @@ async function saveNearPlayerHits() {
 
 async function loadNearPlayerHits() {
   const out = $("hit-study-report");
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = ".json";
   
-  input.onchange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    if (out) out.textContent = "Loading marked hits...";
-    try {
-      const text = await file.text();
-      const payload = JSON.parse(text);
-      
-      const r = await fetch(`/hit-study/${state.analysisId}/labels/upload`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      if (!r.ok) throw new Error(await r.text());
-      const data = await r.json();
-      replaceNearHitLabels(data.labels || []);
-      if (out) out.textContent = `Loaded ${data.labels.length} marks from ${file.name}`;
-    } catch (err) {
-      if (out) out.textContent = "Load marks failed: " + err.message;
+  const handleLoad = (data, sourceStr) => {
+    replaceNearHitLabels(data.labels || []);
+    const filename = data.source_file;
+    if (filename) {
+      state.label_source_file = filename;
+      renderLoadedStatus("label", filename);
     }
+    if (out) out.textContent = `Loaded ${data.labels.length} marks from ${sourceStr}`;
   };
-  input.click();
+
+  const file = await loadFromFileSystem(".json");
+  if (!file) {
+    if (out) out.textContent = "Loading active marks from server...";
+    try {
+      const r = await fetch(`/hit-study/${state.analysisId}/labels/load`);
+      if (!r.ok) throw new Error(await r.text());
+      handleLoad(await r.json(), "server");
+    } catch (e) {
+      if (out) out.textContent = "Load marks failed: " + e.message;
+    }
+    return;
+  }
+  
+  if (out) out.textContent = "Loading marked hits from local file...";
+  try {
+    const text = await file.text();
+    const payload = JSON.parse(text);
+    
+    const r = await fetch(`/hit-study/${state.analysisId}/labels/upload`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!r.ok) throw new Error(await r.text());
+    handleLoad(await r.json(), "local file");
+  } catch (err) {
+    if (out) out.textContent = "Load marks failed: " + err.message;
+  }
 }
 
 function setSlowLabelMode(enabled) {

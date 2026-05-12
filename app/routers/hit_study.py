@@ -564,6 +564,29 @@ def _load_hit_study_context(analysis) -> dict:
     }
 
 
+@router.get("/hit-study/{analysis_id}/labels/load")
+async def load_hit_labels_from_active(analysis_id: str) -> dict:
+    analysis = await get_analysis_run(analysis_id)
+    if analysis is None:
+        raise HTTPException(404, "analysis not found")
+    
+    path = None
+    if analysis.get("active_labels_path"):
+        p = Path(analysis["active_labels_path"])
+        if p.exists():
+            path = p
+    
+    if not path:
+        raise HTTPException(404, "no active label file found")
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        labels = payload.get("labels") or []
+        return {"analysis_id": analysis_id, "labels": labels, "source_file": path.name}
+    except Exception as e:
+        raise HTTPException(500, f"failed to load labels: {e}")
+
+
 @router.post("/hit-study/{analysis_id}/labels/save")
 async def save_hit_labels(analysis_id: str, filename: str | None = None) -> dict:
     analysis = await get_analysis_run(analysis_id)
@@ -594,6 +617,10 @@ async def save_hit_labels(analysis_id: str, filename: str | None = None) -> dict
         ],
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    
+    from app.database import update_analysis_modular_paths
+    await update_analysis_modular_paths(analysis_id, labels_path=str(path))
+    
     return {"analysis_id": analysis_id, "saved_path": str(path), "labels": labels}
 
 
@@ -611,6 +638,9 @@ async def load_hit_labels(analysis_id: str, filename: str | None = None) -> dict
     except json.JSONDecodeError as e:
         raise HTTPException(400, f"saved label file is invalid JSON: {e}") from e
 
+    from app.database import update_analysis_modular_paths
+    await update_analysis_modular_paths(analysis_id, labels_path=str(path))
+
     existing = [
         r for r in await list_strike_labels(analysis_id)
         if r["source"] == "near_player_hit"
@@ -633,16 +663,26 @@ async def load_hit_labels(analysis_id: str, filename: str | None = None) -> dict
     ]
     labels = [_row_to_label(r) for r in rows]
     labels.sort(key=lambda r: r["time_s"])
-    return {"analysis_id": analysis_id, "loaded_path": str(path), "labels": labels}
+    return {"analysis_id": analysis_id, "labels": labels, "source_file": path.name}
 
 
 @router.post("/hit-study/{analysis_id}/labels/upload")
-async def upload_hit_labels(analysis_id: str, payload: dict) -> dict:
+async def upload_hit_labels(analysis_id: str, payload: dict, filename: str | None = None) -> dict:
     analysis = await get_analysis_run(analysis_id)
     if analysis is None:
         raise HTTPException(404, "analysis not found")
     # Allowed for any algorithm now
 
+    path = _label_path(analysis_id, filename)
+    path.write_text(json.dumps({
+        "analysis_id": analysis_id,
+        "saved_at": time.time(),
+        "labels": payload.get("labels") or [],
+    }, indent=2), encoding="utf-8")
+
+    from app.database import update_analysis_modular_paths
+    await update_analysis_modular_paths(analysis_id, labels_path=str(path))
+
     existing = [
         r for r in await list_strike_labels(analysis_id)
         if r["source"] == "near_player_hit"
@@ -665,4 +705,4 @@ async def upload_hit_labels(analysis_id: str, payload: dict) -> dict:
     ]
     labels = [_row_to_label(r) for r in rows]
     labels.sort(key=lambda r: r["time_s"])
-    return {"analysis_id": analysis_id, "labels": labels}
+    return {"analysis_id": analysis_id, "labels": labels, "source_file": path.name}
