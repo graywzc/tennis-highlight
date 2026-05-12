@@ -16,18 +16,26 @@ async def pose_data(analysis_id: str) -> dict:
     if analysis["algorithm"] != POSE_ALGORITHM:
         raise HTTPException(400, "analysis is not a pose analysis")
 
+    analysis = dict(analysis)
     from app.routers.hit_study import _modular_pose_scan_path
-    mod_path = _modular_pose_scan_path(analysis_id)
-    if mod_path.exists():
+    path = _modular_pose_scan_path(analysis_id)
+    
+    if analysis.get("active_pose_scan_path"):
+        p = Path(analysis["active_pose_scan_path"])
+        if p.exists():
+            path = p
+
+    if path.exists():
         import gzip
         import json
-        with gzip.open(mod_path, "rt", encoding="utf-8") as f:
-            payload = json.load(f)
-        return payload.get("result") or payload
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            data = json.load(f)
+            result = data.get("result") or data
+            return {"result": result, "source_file": path.name}
 
     if not analysis["artifact_path"]:
         raise HTTPException(409, "pose artifact is not ready")
     path = Path(analysis["artifact_path"])
     if not path.exists():
         raise HTTPException(410, "pose artifact file missing")
-    return load_pose_artifact(path)
+    return {"result": load_pose_artifact(path), "source_file": path.name}

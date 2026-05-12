@@ -822,11 +822,19 @@ async function loadEditor() {
 
   // 1. Fetch main algorithm data
   if (analysisR && analysisR.metadata && analysisR.metadata.detector === "pose_skeleton_yolo") {
-    state.poseData = await fetch(`/pose-data/${state.analysisId}`).then((r) => r.ok ? r.json() : null);
+    const res = await fetch(`/pose-data/${state.analysisId}`).then((r) => r.ok ? r.json() : null);
+    if (res) {
+      state.poseData = res.result;
+      state.poseData.source_file = res.source_file;
+    }
   } else if (isHitStudy()) {
-    state.hitStudyData = await fetch(`/hit-study/${state.analysisId}/data`).then((r) => r.ok ? r.json() : null);
-    if (state.hitStudyData && Array.isArray(state.hitStudyData.frames) && state.hitStudyData.frames.length) {
-      state.poseData = state.hitStudyData;
+    const res = await fetch(`/hit-study/${state.analysisId}/data`).then((r) => r.ok ? r.json() : null);
+    if (res) {
+      state.hitStudyData = res;
+      if (res.frames && res.frames.length) {
+        state.poseData = res;
+        // res already has pose_source_file and audio_source_file
+      }
     }
   }
 
@@ -835,7 +843,7 @@ async function loadEditor() {
     const modPose = await fetch(`/hit-study/${state.analysisId}/pose-scan/load`).then((r) => r.ok ? r.json() : null);
     if (modPose && modPose.result) {
       state.poseData = modPose.result;
-      renderLoadedStatus("pose", modPose.source_file);
+      state.poseData.source_file = modPose.source_file;
     }
   }
 
@@ -858,7 +866,7 @@ async function loadEditor() {
     const modAudio = await fetch(`/hit-study/${state.analysisId}/audio-scan/load`).then((r) => r.ok ? r.json() : null);
     if (modAudio && modAudio.result && Array.isArray(modAudio.result.impacts)) {
       state.impacts = modAudio.result.impacts.slice().sort((a, b) => a.time_s - b.time_s);
-      renderLoadedStatus("audio", modAudio.source_file);
+      state.audio_source_file = modAudio.source_file; // attach to state directly or hitStudyData
     }
   }
 
@@ -867,7 +875,7 @@ async function loadEditor() {
     const ballR = await fetch(`/hit-study/${state.analysisId}/ball-scan/load`).then((r) => r.ok ? r.json() : null);
     if (ballR && ballR.result) {
       state.ballScan = ballR.result;
-      renderLoadedStatus("ball", ballR.source_file);
+      state.ballScan.source_file = ballR.source_file;
     }
   }
 
@@ -941,6 +949,24 @@ function renderAll() {
   renderAnalysisSummary();
   renderPosePanel();
   renderBallScanSummary();
+  renderHitStudyPanel();
+  
+  // Refresh active file labels
+  if (state.poseData && state.poseData.source_file) {
+    renderLoadedStatus("pose", state.poseData.source_file);
+  } else if (state.hitStudyData && state.hitStudyData.pose_source_file) {
+    renderLoadedStatus("pose", state.hitStudyData.pose_source_file);
+  }
+  
+  if (state.audio_source_file) {
+    renderLoadedStatus("audio", state.audio_source_file);
+  } else if (state.hitStudyData && state.hitStudyData.audio_source_file) {
+    renderLoadedStatus("audio", state.hitStudyData.audio_source_file);
+  }
+  
+  if (state.ballScan && state.ballScan.source_file) {
+    renderLoadedStatus("ball", state.ballScan.source_file);
+  }
 }
 
 function renderBallScanSummary(sourceStr) {
@@ -2631,10 +2657,7 @@ function scheduleBallDiagnostic() {
   state.ballDiagnosticTimer = setTimeout(() => {
     const player = $("player");
     if (!player || !state.ballHeatmapEnabled) return;
-    const labels = Object.values(state.strikeLabels).filter((l) => l.source === "near_player_hit");
-    if (!labels.length && !state.ballDiagnostic) return;
     const center = ballDiagnosticCenterTime(player.currentTime || 0);
-    if (labels.length && Math.min(...labels.map((l) => Math.abs(l.time_s - (player.currentTime || 0)))) > 1.5) return;
     if (state.ballDiagnostic && Math.abs(Number(state.ballDiagnostic.time_s || 0) - center) < 0.2) return;
     runBallDiagnostic();
   }, 250);

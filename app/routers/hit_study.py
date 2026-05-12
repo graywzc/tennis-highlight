@@ -482,17 +482,32 @@ def _modular_audio_scan_path(analysis_id: str) -> Path:
 
 
 def _load_hit_study_context(analysis) -> dict:
+    analysis = dict(analysis)
     pose_path = _modular_pose_scan_path(analysis["id"])
     audio_path = _modular_audio_scan_path(analysis["id"])
+    
+    # If the database has active paths, use them if they exist
+    if analysis.get("active_pose_scan_path"):
+        p = Path(analysis["active_pose_scan_path"])
+        if p.exists():
+            pose_path = p
+    if analysis.get("active_audio_scan_path"):
+        p = Path(analysis["active_audio_scan_path"])
+        if p.exists():
+            audio_path = p
 
     # If no modular scans exist, fallback to old monolithic artifact if present
     if not pose_path.exists() and not audio_path.exists() and analysis["artifact_path"]:
         path = Path(analysis["artifact_path"])
         if not path.exists():
             raise HTTPException(410, "hit study artifact file missing")
-        return load_hit_study_artifact(path)
+        art = load_hit_study_artifact(path)
+        art["pose_source_file"] = path.name
+        art["audio_source_file"] = path.name
+        return art
 
     audio = {"impacts": []}
+    audio_source = None
     if audio_path.exists():
         payload = json.loads(audio_path.read_text(encoding="utf-8"))
         audio_result = payload.get("result") or payload
@@ -505,6 +520,7 @@ def _load_hit_study_context(analysis) -> dict:
             "range_end_s": audio_result.get("range_end_s"),
             "impact_count": audio_result.get("impact_count", len(audio_result.get("impacts") or [])),
         }
+        audio_source = audio_path.name
 
     if pose_path.exists():
         with gzip.open(pose_path, "rt", encoding="utf-8") as f:
@@ -528,6 +544,8 @@ def _load_hit_study_context(analysis) -> dict:
             "frames": frames,
             "audio": audio,
             "feature_windows": [],
+            "pose_source_file": pose_path.name,
+            "audio_source_file": audio_source,
         }
 
     return {
@@ -546,6 +564,7 @@ def _load_hit_study_context(analysis) -> dict:
         "frames": [],
         "audio": audio,
         "feature_windows": [],
+        "audio_source_file": audio_source,
     }
 
 
