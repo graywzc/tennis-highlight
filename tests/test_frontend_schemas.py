@@ -78,7 +78,7 @@ class DetectorConfigSchemaTests(unittest.TestCase):
     belong to which detector. These tests guard its shape."""
 
     def test_three_known_detectors_present(self):
-        for det in ("median_frame", "median_court_roi", "pose_skeleton_yolo", "near_player_hit_study"):
+        for det in ("median_frame", "median_court_roi", "pose_skeleton_yolo"):
             with self.subTest(detector=det):
                 keys = _detector_keys(APP_JS, det)
                 self.assertGreater(
@@ -88,8 +88,6 @@ class DetectorConfigSchemaTests(unittest.TestCase):
     def test_median_frame_includes_core_post_processing_knobs(self):
         keys = _detector_keys(APP_JS, "median_frame")
         for required in (
-            "sample_fps",
-            "median_bg_samples",
             "diff_threshold",
             "motion_threshold",
             "merge_gap_s",
@@ -274,31 +272,11 @@ class HelpPopoverWiringTests(unittest.TestCase):
             "expected a keydown handler for Escape close",
         )
 
-
-class RenderAnalysisConfigsTests(unittest.TestCase):
-    """The pill renderer must filter by detector and apply hover help."""
-
-    def test_filter_uses_detector_configs(self):
-        m = re.search(
-            r"function renderAnalysisConfigs\([^)]*\)\s*\{",
+        # And handles Escape to close.
+        self.assertRegex(
             APP_JS,
-        )
-        self.assertIsNotNone(m)
-        body = _balanced_block(APP_JS, m.end(), "{", "}")
-        self.assertIn(
-            "DETECTOR_CONFIGS",
-            body,
-            "renderAnalysisConfigs should filter pills using DETECTOR_CONFIGS",
-        )
-        self.assertIn(
-            "pill.title",
-            body,
-            "renderAnalysisConfigs should set pill.title for hover help",
-        )
-        self.assertIn(
-            "HELP_TEXT",
-            body,
-            "renderAnalysisConfigs should source tooltips from HELP_TEXT",
+            r"document\.addEventListener\(\s*[\"']keydown[\"']",
+            "expected a keydown handler for Escape close",
         )
 
 

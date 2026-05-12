@@ -24,8 +24,7 @@ _configure_logging()
 logger = logging.getLogger("app")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+def _ensure_runtime_dirs() -> None:
     for d in (
         settings.upload_dir,
         settings.exports_dir,
@@ -33,6 +32,11 @@ async def lifespan(app: FastAPI):
         settings.analysis_dir,
     ):
         d.mkdir(parents=True, exist_ok=True)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _ensure_runtime_dirs()
     await init_db()
     logger.info(
         "startup complete (verbose=%s, motion_threshold=%.3f, sample_fps=%.1f)",
@@ -56,6 +60,7 @@ app.include_router(segments.router)
 app.include_router(export.router)
 app.include_router(download.router)
 
+_ensure_runtime_dirs()
 app.mount("/uploads", StaticFiles(directory=str(settings.upload_dir)), name="uploads")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 

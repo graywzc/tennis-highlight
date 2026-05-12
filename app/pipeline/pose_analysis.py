@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 from typing import Callable
 
-import cv2
 import numpy as np
 
 from app.config import settings

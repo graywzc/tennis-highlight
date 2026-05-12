@@ -41,3 +41,31 @@ async def probe_duration(path: Path) -> float:
     duration = float(data["format"]["duration"])
     logger.debug("ffprobe %s: duration=%.2fs", path.name, duration)
     return duration
+
+
+async def probe_video_fps(path: Path) -> float:
+    proc = await asyncio.create_subprocess_exec(
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-print_format", "json",
+        "-show_streams",
+        str(path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffprobe failed: {stderr.decode(errors='replace')}")
+    streams = json.loads(stdout).get("streams") or []
+    if not streams:
+        raise RuntimeError("no video stream found")
+    stream = streams[0]
+    fps_str = stream.get("avg_frame_rate") or stream.get("r_frame_rate") or "0/0"
+    if "/" in fps_str:
+        numerator, denominator = fps_str.split("/", 1)
+        fps = float(numerator) / float(denominator) if float(denominator) > 0 else 0.0
+    else:
+        fps = float(fps_str)
+    logger.debug("ffprobe %s: fps=%.3f", path.name, fps)
+    return fps
