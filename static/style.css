@@ -705,3 +705,14 @@ select {
 .badge-analyzing { background: #ddf4ff; color: #0969da; }
 .badge-pending   { background: #f0f0f0; color: #57606a; }
 .badge-error     { background: #ffe0d4; color: #82071e; }
+
+.active-file-status {
+  font-size: 0.85em;
+  color: var(--color-muted);
+  margin-top: 4px;
+}
+
+.active-file-name {
+  color: var(--color-on);
+  font-family: monospace;
+}

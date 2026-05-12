@@ -195,7 +195,10 @@ async def load_pose_scan(analysis_id: str) -> dict:
     if not path.exists():
         raise HTTPException(404, f"no saved pose scan at {path}")
     with gzip.open(path, "rt", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+        # Always return a standardized wrapper for modular loads
+        result = data.get("result") or data
+        return {"result": result, "source_file": path.name}
 
 @router.get("/hit-study/{analysis_id}/pose-scan/download")
 async def download_pose_scan(analysis_id: str):
@@ -420,7 +423,9 @@ async def load_audio_scan(analysis_id: str) -> dict:
             
     if not path.exists():
         raise HTTPException(404, f"no saved audio scan at {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    result = data.get("result") or data
+    return {"result": result, "source_file": path.name}
 
 @router.get("/hit-study/{analysis_id}/audio-scan/download")
 async def download_audio_scan(analysis_id: str):

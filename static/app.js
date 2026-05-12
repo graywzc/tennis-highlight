@@ -835,6 +835,7 @@ async function loadEditor() {
     const modPose = await fetch(`/hit-study/${state.analysisId}/pose-scan/load`).then((r) => r.ok ? r.json() : null);
     if (modPose && modPose.result) {
       state.poseData = modPose.result;
+      renderLoadedStatus("pose", modPose.source_file);
     }
   }
 
@@ -857,6 +858,7 @@ async function loadEditor() {
     const modAudio = await fetch(`/hit-study/${state.analysisId}/audio-scan/load`).then((r) => r.ok ? r.json() : null);
     if (modAudio && modAudio.result && Array.isArray(modAudio.result.impacts)) {
       state.impacts = modAudio.result.impacts.slice().sort((a, b) => a.time_s - b.time_s);
+      renderLoadedStatus("audio", modAudio.source_file);
     }
   }
 
@@ -865,6 +867,7 @@ async function loadEditor() {
     const ballR = await fetch(`/hit-study/${state.analysisId}/ball-scan/load`).then((r) => r.ok ? r.json() : null);
     if (ballR && ballR.result) {
       state.ballScan = ballR.result;
+      renderLoadedStatus("ball", ballR.source_file);
     }
   }
 
@@ -1159,6 +1162,17 @@ const AUDIO_KNOB_KEYS = new Set([
   "min_impact_separation_s",
   "min_wrist_velocity",
 ]);
+
+function renderLoadedStatus(type, filename) {
+  const el = $(`${type}-loaded-status`);
+  if (!el) return;
+  if (filename) {
+    el.className = "active-file-status";
+    el.innerHTML = `Active file: <span class="active-file-name">${filename}</span>`;
+  } else {
+    el.textContent = "";
+  }
+}
 
 function renderKnobs() {
   renderingKnobs = true;
@@ -2552,6 +2566,11 @@ async function saveBallScan() {
           body: JSON.stringify({ job_id: state.ballScanJobId, result: state.ballScan }),
         });
         if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        if (data.saved_path) {
+          const parts = data.saved_path.split("/");
+          renderLoadedStatus("ball", parts[parts.length - 1]);
+        }
         out.textContent = "Saved locally and set as default.";
       } else {
         out.textContent = "Saved locally.";
@@ -2567,9 +2586,11 @@ async function loadBallScan() {
   const out = $("tracknet-summary");
   if (!state.analysisId) return;
   
-  const handleLoad = (data, sourceStr) => {
-    state.ballScan = data.result;
+  const handleLoad = (payload, sourceStr) => {
+    state.ballScan = payload.result;
+    const filename = payload.source_file;
     renderBallScanSummary(sourceStr);
+    renderLoadedStatus("ball", filename);
     drawPoseOverlay();
   };
 
@@ -2578,7 +2599,7 @@ async function loadBallScan() {
     try {
       const r = await fetch(`/hit-study/${state.analysisId}/ball-scan/load`);
       if (!r.ok) throw new Error(await r.text());
-      handleLoad(await r.json(), "from server");
+      handleLoad(await r.json(), "server");
     } catch (e) {
       if (out) out.textContent = "Load scan failed: " + e.message;
     }
@@ -2593,10 +2614,12 @@ async function loadBallScan() {
     await fetch(`/hit-study/${state.analysisId}/ball-scan/save`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ job_id: "local_upload", result: payload.result }),
+      body: JSON.stringify({ job_id: "local_upload", result: payload.result || payload }),
     });
     
-    handleLoad(payload, "from local file");
+    // If payload was raw result, wrap it
+    const wrapped = payload.result ? payload : { result: payload, source_file: file.name };
+    handleLoad(wrapped, "local file");
   } catch (e) {
     if (out) out.textContent = "Load scan failed: " + e.message;
   }
@@ -3205,6 +3228,11 @@ async function savePoseScan() {
         out.textContent = "Updating server-side cache...";
         const r = await fetch(`/hit-study/${state.analysisId}/pose-scan/save`, { method: "POST" });
         if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        if (data.saved_path) {
+          const parts = data.saved_path.split("/");
+          renderLoadedStatus("pose", parts[parts.length - 1]);
+        }
         out.textContent = "Saved locally and set as default.";
       } else {
         out.textContent = "Saved locally.";
@@ -3221,6 +3249,11 @@ async function rememberPoseScanOnServer() {
   try {
     const r = await fetch(`/hit-study/${state.analysisId}/pose-scan/save`, { method: "POST" });
     if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    if (data.saved_path) {
+      const parts = data.saved_path.split("/");
+      renderLoadedStatus("pose", parts[parts.length - 1]);
+    }
     return true;
   } catch (e) {
     console.warn("could not remember pose scan", e);
@@ -3234,6 +3267,7 @@ async function loadPoseScan() {
   
   const handleLoad = (payload, sourceStr) => {
     const result = payload.result;
+    const filename = payload.source_file;
     if (result) {
       state.poseData = {
         metadata: {
@@ -3251,7 +3285,8 @@ async function loadPoseScan() {
       renderPosePanel();
       drawPoseOverlay();
       drawTimeline();
-      out.textContent = `Loaded: ${result.summary?.sample_count || 0} frames, ${result.summary?.frames_with_poses || 0} with poses ${sourceStr}`;
+      renderLoadedStatus("pose", filename);
+      out.textContent = `Loaded: ${result.summary?.sample_count || 0} frames from ${sourceStr}`;
     } else {
       out.textContent = "Load returned no data.";
     }
@@ -3259,11 +3294,11 @@ async function loadPoseScan() {
 
   const file = await loadFromFileSystem(".gz,.json");
   if (!file) {
-    out.textContent = "Loading saved pose data from server...";
+    out.textContent = "Loading active pose data from server...";
     try {
       const r = await fetch(`/hit-study/${state.analysisId}/pose-scan/load`);
       if (!r.ok) throw new Error(await r.text());
-      handleLoad(await r.json(), "from server");
+      handleLoad(await r.json(), "server");
     } catch (e) {
       out.textContent = "Load failed: " + e.message;
     }
@@ -3279,7 +3314,7 @@ async function loadPoseScan() {
       body: formData,
     });
     if (!r.ok) throw new Error(await r.text());
-    handleLoad(await r.json(), "from local file");
+    handleLoad(await r.json(), "local file");
   } catch (e) {
     out.textContent = "Load failed: " + e.message;
   }
@@ -3352,6 +3387,11 @@ async function rememberAudioScanOnServer() {
   try {
     const r = await fetch(`/hit-study/${state.analysisId}/audio-scan/save`, { method: "POST" });
     if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    if (data.saved_path) {
+      const parts = data.saved_path.split("/");
+      renderLoadedStatus("audio", parts[parts.length - 1]);
+    }
     return true;
   } catch (e) {
     console.warn("could not remember audio scan", e);
@@ -3401,6 +3441,11 @@ async function saveAudioScan() {
         out.textContent = "Updating server-side cache...";
         const r = await fetch(`/hit-study/${state.analysisId}/audio-scan/save`, { method: "POST" });
         if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        if (data.saved_path) {
+          const parts = data.saved_path.split("/");
+          renderLoadedStatus("audio", parts[parts.length - 1]);
+        }
         out.textContent = "Saved locally and set as default.";
       } else {
         out.textContent = "Saved locally.";
@@ -3419,14 +3464,16 @@ async function loadAudioScan() {
   
   const handleLoad = (payload, sourceStr) => {
     const result = payload.result;
+    const filename = payload.source_file;
     if (result) {
       const impacts = result.impacts || [];
       replaceImpactsInRange(result.range_start_s, result.range_end_s, impacts);
-      out.textContent = `Loaded: ${impacts.length} impacts ${sourceStr}`;
       renderStrikeNav();
       renderStrikeDiagnostic();
       renderStrikeStats();
       drawTimeline();
+      renderLoadedStatus("audio", filename);
+      out.textContent = `Loaded: ${impacts.length} impacts from ${sourceStr}`;
     } else {
       out.textContent = "Load returned no data.";
     }
@@ -3434,11 +3481,11 @@ async function loadAudioScan() {
 
   const file = await loadFromFileSystem(".json");
   if (!file) {
-    out.textContent = "Loading saved audio data from server...";
+    out.textContent = "Loading active audio data from server...";
     try {
       const r = await fetch(`/hit-study/${state.analysisId}/audio-scan/load`);
       if (!r.ok) throw new Error(await r.text());
-      handleLoad(await r.json(), "from server");
+      handleLoad(await r.json(), "server");
     } catch (e) {
       out.textContent = "Load failed: " + e.message;
     }
@@ -3454,7 +3501,7 @@ async function loadAudioScan() {
       body: formData,
     });
     if (!r.ok) throw new Error(await r.text());
-    handleLoad(await r.json(), "from local file");
+    handleLoad(await r.json(), "local file");
   } catch (e) {
     out.textContent = "Load failed: " + e.message;
   }

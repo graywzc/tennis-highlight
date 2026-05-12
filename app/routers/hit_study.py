@@ -307,7 +307,9 @@ async def load_ball_scan(analysis_id: str) -> dict:
 
     if not path.exists():
         raise HTTPException(404, f"saved scan not found at {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    result = data.get("result") or data
+    return {"result": result, "source_file": path.name}
 
 
 def _run_ball_scan_job(
