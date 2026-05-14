@@ -40,10 +40,31 @@ def run_tracknet_window(
     if not cap.isOpened():
         raise RuntimeError(f"could not open video for TrackNet diagnostic: {video_path}")
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 60.0)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
     start_s = max(0.0, float(time_s) - window_s)
     end_s = float(time_s) + window_s
     decode_start_s = max(0.0, start_s - 2.0 / max(1.0, fps))
     cap.set(cv2.CAP_PROP_POS_MSEC, decode_start_s * 1000.0)
+
+    # Prepare crop coordinates if ROI is provided
+    crop_box = None
+    if roi:
+        # Convert normalized ROI to pixel coordinates
+        x1 = int(float(roi["x1"]) * width)
+        y1 = int(float(roi["y1"]) * height)
+        x2 = int(float(roi["x2"]) * width)
+        y2 = int(float(roi["y2"]) * height)
+        
+        # Ensure crop is within frame bounds
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(width, x2)
+        y2 = min(height, y2)
+        
+        if x2 > x1 and y2 > y1:
+            crop_box = (x1, y1, x2, y2)
 
     frames: list[tuple[float, np.ndarray]] = []
     idx = 0
@@ -55,6 +76,12 @@ def run_tracknet_window(
         if t > end_s:
             break
         idx += 1
+        
+        # Crop frame if requested
+        if crop_box:
+            x1, y1, x2, y2 = crop_box
+            frame = frame[y1:y2, x1:x2]
+            
         frames.append((float(t), frame))
     cap.release()
 
@@ -63,6 +90,8 @@ def run_tracknet_window(
         t = frames[i][0]
         if t < start_s or t > end_s:
             continue
+            
+        # Inference on the crop (or full frame if no crop)
         pred = _predict_ball(
             model,
             device,
@@ -74,11 +103,23 @@ def run_tracknet_window(
         )
         if pred is None:
             continue
-        x, y, score = pred
-        if roi and not (float(roi["x1"]) <= x <= float(roi["x2"]) and float(roi["y1"]) <= y <= float(roi["y2"])):
-            continue
+        
+        x_rel, y_rel, score = pred
+        
+        # Map relative crop coordinates back to full-frame normalized coordinates
+        if crop_box:
+            x1, y1, x2, y2 = crop_box
+            crop_w = x2 - x1
+            crop_h = y2 - y1
+            x = (x1 + x_rel * crop_w) / width
+            y = (y1 + y_rel * crop_h) / height
+        else:
+            x = x_rel
+            y = y_rel
+
         if exclude_player and player_box and _point_in_box(x, y, player_box, pad_x=0.015, pad_y=0.02):
             continue
+            
         candidates.append({
             "time_s": float(t),
             "dt_s": float(t - time_s),
