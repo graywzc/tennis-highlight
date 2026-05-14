@@ -498,6 +498,34 @@ suite("strike stats", () => {
   });
 });
 
+// ---- Active modular file labels -----------------------------------------
+
+suite("active modular file labels", () => {
+  it("keeps saved modular filenames after a full render", () => {
+    const win = makeDom();
+    win.state.poseData = { source_file: "old.pose-scan.json.gz" };
+    win.state.hitStudyData = { pose_source_file: "old.pose-scan.json.gz" };
+    win.state.ballScan = { source_file: "old.ball-scan.json" };
+    win.state.audio_source_file = "old.audio-scan.json";
+    win.state.label_source_file = "old.near-player-hit-labels.json";
+
+    win.setLoadedSourceFile("pose", "20260514_120000_analysis.pose-scan.json.gz");
+    win.setLoadedSourceFile("ball", "20260514_120001_analysis.ball-scan.json");
+    win.setLoadedSourceFile("audio", "20260514_120002_analysis.audio-scan.json");
+    win.setLoadedSourceFile("label", "20260514_120003_analysis.near-player-hit-labels.json");
+    win.renderAll();
+
+    assert.match(win.document.getElementById("pose-loaded-status").textContent, /20260514_120000_analysis\.pose-scan\.json\.gz/);
+    assert.match(win.document.getElementById("ball-loaded-status").textContent, /20260514_120001_analysis\.ball-scan\.json/);
+    assert.match(win.document.getElementById("audio-loaded-status").textContent, /20260514_120002_analysis\.audio-scan\.json/);
+    assert.match(win.document.getElementById("label-loaded-status").textContent, /20260514_120003_analysis\.near-player-hit-labels\.json/);
+    assert.equal(win.state.poseData.source_file, "20260514_120000_analysis.pose-scan.json.gz");
+    assert.equal(win.state.ballScan.source_file, "20260514_120001_analysis.ball-scan.json");
+    assert.equal(win.state.audio_source_file, "20260514_120002_analysis.audio-scan.json");
+    assert.equal(win.state.label_source_file, "20260514_120003_analysis.near-player-hit-labels.json");
+  });
+});
+
 // ---- Near-player hit export ---------------------------------------------
 
 suite("near-player hit export", () => {

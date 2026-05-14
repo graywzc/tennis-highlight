@@ -44,6 +44,7 @@ class BallScanRequest(BaseModel):
 class BallScanSaveRequest(BaseModel):
     job_id: str | None = None
     result: dict | None = None
+    filename: str | None = None
 
 
 def _label_dir() -> Path:
@@ -274,9 +275,20 @@ async def save_ball_scan(analysis_id: str, payload: BallScanSaveRequest) -> dict
         job = BALL_SCAN_JOBS.get(payload.job_id)
         if job:
             result = job.get("result")
+            
+    # Fallback to active ball scan if result is still None
+    if not result and dict(analysis).get("active_ball_scan_path"):
+        active_path = Path(analysis["active_ball_scan_path"])
+        if active_path.exists():
+            try:
+                data = json.loads(active_path.read_text(encoding="utf-8"))
+                result = data.get("result") or data
+            except Exception:
+                pass
+
     if not result:
         raise HTTPException(400, "no scan result to save")
-    path = _ball_scan_path(analysis_id)
+    path = _ball_scan_path(analysis_id, payload.filename)
     path.write_text(json.dumps({
         "analysis_id": analysis_id,
         "saved_at": time.time(),
@@ -464,18 +476,23 @@ def _video_fps(video_path: Path) -> float:
         cap.release()
 
 
-def _ball_scan_path(analysis_id: str) -> Path:
+def _ball_scan_path(analysis_id: str, filename: str | None = None) -> Path:
     path = settings.analysis_dir.parent / "ball_scans"
     path.mkdir(parents=True, exist_ok=True)
+    if filename:
+        safe_name = Path(filename).name
+        if not safe_name.endswith(".json"):
+            safe_name += ".json"
+        return path / safe_name
     return path / f"{analysis_id}.ball-scan.json"
 
 
 def _modular_pose_scan_path(analysis_id: str) -> Path:
-    return settings.analysis_dir.parent / "modular_scans" / f"{analysis_id}.pose-scan.json.gz"
+    return settings.analysis_dir.parent / "yolo_pose_scans" / f"{analysis_id}.pose-scan.json.gz"
 
 
 def _modular_audio_scan_path(analysis_id: str) -> Path:
-    return settings.analysis_dir.parent / "modular_scans" / f"{analysis_id}.audio-scan.json"
+    return settings.analysis_dir.parent / "audio_scans" / f"{analysis_id}.audio-scan.json"
 
 
 def _load_hit_study_context(analysis) -> dict:

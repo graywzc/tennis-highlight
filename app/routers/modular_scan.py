@@ -64,22 +64,28 @@ class AudioScanRequest(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _artifacts_dir() -> Path:
-    d = settings.analysis_dir.parent / "modular_scans"
+def _pose_dir() -> Path:
+    d = settings.analysis_dir.parent / "yolo_pose_scans"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _audio_dir() -> Path:
+    d = settings.analysis_dir.parent / "audio_scans"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def _pose_artifact_path(analysis_id: str, filename: str | None = None) -> Path:
     if filename:
-        return _artifacts_dir() / filename
-    return _artifacts_dir() / f"{analysis_id}.pose-scan.json.gz"
+        return _pose_dir() / filename
+    return _pose_dir() / f"{analysis_id}.pose-scan.json.gz"
 
 
 def _audio_artifact_path(analysis_id: str, filename: str | None = None) -> Path:
     if filename:
-        return _artifacts_dir() / filename
-    return _artifacts_dir() / f"{analysis_id}.audio-scan.json"
+        return _audio_dir() / filename
+    return _audio_dir() / f"{analysis_id}.audio-scan.json"
 
 
 async def _get_hit_study(analysis_id: str):
@@ -144,6 +150,18 @@ async def save_pose_scan(analysis_id: str, filename: str | None = None) -> dict:
     # Find the latest completed job for this analysis
     job = _latest_job(POSE_SCAN_JOBS, analysis_id)
     result = job.get("result") if job else None
+
+    # Fallback to active modular scan
+    if not result:
+        active_path_str = dict(analysis).get("active_pose_scan_path")
+        active_path = Path(active_path_str) if active_path_str else _pose_artifact_path(analysis_id)
+        if active_path.exists():
+            try:
+                with gzip.open(active_path, "rt", encoding="utf-8") as f:
+                    data = json.load(f)
+                    result = data.get("result") or data
+            except Exception:
+                pass
 
     if not result and dict(analysis).get("artifact_path"):
         try:
@@ -219,18 +237,17 @@ async def upload_pose_scan(analysis_id: str, file: UploadFile = File(...), filen
     target_name = filename or file.filename or f"{analysis_id}.pose-scan.json.gz"
     if not target_name.endswith(".gz"):
         target_name += ".gz"
-        
-    path = _artifacts_dir() / target_name
+
+    path = _pose_dir() / target_name
     content = await file.read()
     with open(path, "wb") as f:
         f.write(content)
-        
+
     from app.database import update_analysis_modular_paths
     await update_analysis_modular_paths(analysis_id, pose_path=str(path))
-    
+
     with gzip.open(path, "rt", encoding="utf-8") as f:
         return json.load(f)
-
 
 def _run_pose_scan(
     job_id: str,
@@ -377,6 +394,16 @@ async def save_audio_scan(analysis_id: str, filename: str | None = None) -> dict
     job = _latest_job(AUDIO_SCAN_JOBS, analysis_id)
     result = job.get("result") if job else None
 
+    # Fallback to active modular scan
+    if not result and dict(analysis).get("active_audio_scan_path"):
+        active_path = Path(analysis["active_audio_scan_path"])
+        if active_path.exists():
+            try:
+                data = json.loads(active_path.read_text(encoding="utf-8"))
+                result = data.get("result") or data
+            except Exception:
+                pass
+
     if not result and dict(analysis).get("artifact_path"):
         try:
             artifact = load_hit_study_artifact(Path(analysis["artifact_path"]))
@@ -446,17 +473,16 @@ async def upload_audio_scan(analysis_id: str, file: UploadFile = File(...), file
     target_name = filename or file.filename or f"{analysis_id}.audio-scan.json"
     if not target_name.endswith(".json"):
         target_name += ".json"
-        
-    path = _artifacts_dir() / target_name
+
+    path = _audio_dir() / target_name
     content = await file.read()
     with open(path, "wb") as f:
         f.write(content)
-        
+
     from app.database import update_analysis_modular_paths
     await update_analysis_modular_paths(analysis_id, audio_path=str(path))
-    
-    return json.loads(path.read_text(encoding="utf-8"))
 
+    return json.loads(path.read_text(encoding="utf-8"))
 
 def _run_audio_scan(
     job_id: str,

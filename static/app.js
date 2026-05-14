@@ -1220,6 +1220,21 @@ function renderLoadedStatus(type, filename) {
   }
 }
 
+function setLoadedSourceFile(type, filename) {
+  if (type === "pose" && filename) {
+    if (state.poseData) state.poseData.source_file = filename;
+    if (state.hitStudyData) state.hitStudyData.pose_source_file = filename;
+  } else if (type === "audio" && filename) {
+    state.audio_source_file = filename;
+    if (state.hitStudyData) state.hitStudyData.audio_source_file = filename;
+  } else if (type === "ball" && filename) {
+    if (state.ballScan) state.ballScan.source_file = filename;
+  } else if (type === "label" && filename) {
+    state.label_source_file = filename;
+  }
+  renderLoadedStatus(type, filename);
+}
+
 function renderKnobs() {
   renderingKnobs = true;
   const knobs = state.knobs || state.defaultKnobs;
@@ -1872,6 +1887,9 @@ function renderCentroidReadout() {
 // Player sync -------------------------------------------------------------
 function setupPlayer() {
   const player = $("player");
+  player.addEventListener("loadedmetadata", () => {
+    updateRoiLabels();
+  });
   player.addEventListener("timeupdate", () => {
     drawTimeline();
     renderPoseCurrent();
@@ -1879,6 +1897,7 @@ function setupPlayer() {
     renderCentroidReadout();
     scheduleBallDiagnostic();
     drawPoseOverlay();
+    updateRoiLabels();
     $("missed-strike-time") &&
       ($("missed-strike-time").textContent = fmtPrecise(player.currentTime || 0));
     $("near-hit-time") &&
@@ -2318,6 +2337,7 @@ function renderHitStudyPanel() {
     pills.appendChild(pill);
   }
   root.appendChild(pills);
+  updateRoiLabels();
 }
 
 async function markNearPlayerHit() {
@@ -2384,26 +2404,125 @@ async function runBallDiagnostic() {
 }
 
 function ballRoiParams() {
-  const width = parseFloat($("ball-roi-width") ? $("ball-roi-width").value || "3" : "3");
-  const height = parseFloat($("ball-roi-height") ? $("ball-roi-height").value || "1" : "1");
+  const widthExp = parseFloat($("ball-roi-width") ? $("ball-roi-width").value || "3" : "3");
+  const heightExp = parseFloat($("ball-roi-height") ? $("ball-roi-height").value || "1" : "1");
+  const infScale = parseFloat($("ball-inference-scale") ? $("ball-inference-scale").value || "1.0" : "1.0");
   const threshold = parseFloat($("ball-diff-threshold") ? $("ball-diff-threshold").value || "12" : "12");
+  
+  // Calculate inference size based on current ROI
+  const player = $("player");
+  let infW = parseInt($("tracknet-width") ? $("tracknet-width").value || "640" : "640", 10);
+  let infH = parseInt($("tracknet-height") ? $("tracknet-height").value || "360" : "360", 10);
+  
+  const roiMode = $("ball-roi-mode") ? $("ball-roi-mode").value : "near_player";
+  
+  if (player && player.videoWidth) {
+    const nativeW = player.videoWidth;
+    const nativeH = player.videoHeight;
+    let cropW = nativeW;
+    let cropH = nativeH;
+    
+    if (roiMode === "near_player" && state.poseData && state.poseData.frames) {
+      const timeS = player.currentTime || 0;
+      const frames = state.poseData.frames.filter(f => f.near_player);
+      if (frames.length) {
+        let best = frames[0];
+        let minD = Math.abs(best.time_s - timeS);
+        for (const f of frames) {
+          const d = Math.abs(f.time_s - timeS);
+          if (d < minD) { minD = d; best = f; }
+        }
+        const box = best.near_player.box;
+        const wNorm = Math.max(0.04, box.x2 - box.x1);
+        const hNorm = Math.max(0.08, box.y2 - box.y1);
+        const roiWNorm = wNorm * (1 + 2 * widthExp);
+        const expandDown = Math.max(0.25, heightExp * 0.8);
+        const roiHNorm = hNorm * (1 + heightExp + expandDown);
+        cropW = roiWNorm * nativeW;
+        cropH = roiHNorm * nativeH;
+      }
+    }
+    
+    infW = Math.max(8, Math.round((cropW * infScale) / 8) * 8);
+    infH = Math.max(8, Math.round((cropH * infScale) / 8) * 8);
+  }
+
   return {
     ball_detector: "tracknet",
-    roi_mode: $("ball-roi-mode") ? $("ball-roi-mode").value : "near_player",
+    roi_mode: roiMode,
     scan_range: $("ball-scan-range") ? $("ball-scan-range").value : "analysis_range",
     scan_target: $("ball-scan-target") ? $("ball-scan-target").value : "audio_candidates",
     mark_before_s: parseFloat($("ball-scan-before") ? $("ball-scan-before").value || "1" : "1"),
     mark_after_s: parseFloat($("ball-scan-after") ? $("ball-scan-after").value || "1" : "1"),
     scan_fps: $("ball-scan-fps") ? $("ball-scan-fps").value : "15",
-    tracknet_width: parseInt($("tracknet-width") ? $("tracknet-width").value || "640" : "640", 10),
-    tracknet_height: parseInt($("tracknet-height") ? $("tracknet-height").value || "360" : "360", 10),
+    tracknet_width: infW,
+    tracknet_height: infH,
     tracknet_stack_frames: 3,
-    roi_expand_x: width,
-    roi_expand_up: height,
-    roi_expand_down: Math.max(0.25, height * 0.8),
+    roi_expand_x: widthExp,
+    roi_expand_up: heightExp,
+    roi_expand_down: Math.max(0.25, heightExp * 0.8),
     exclude_player: $("ball-exclude-player-toggle") ? $("ball-exclude-player-toggle").checked : true,
     diff_threshold: threshold,
   };
+}
+
+function updateRoiLabels() {
+  const widthExp = parseFloat($("ball-roi-width").value);
+  const heightExp = parseFloat($("ball-roi-height").value);
+  const infScale = parseFloat($("ball-inference-scale").value);
+  
+  $("ball-roi-width-display").textContent = widthExp.toFixed(2);
+  $("ball-roi-height-display").textContent = heightExp.toFixed(2);
+  $("ball-inference-scale-display").textContent = infScale.toFixed(2);
+
+  const player = $("player");
+  if (!player) return;
+
+  const nativeW = player.videoWidth || 1920;
+  const nativeH = player.videoHeight || 1080;
+
+  let cropW = nativeW;
+  let cropH = nativeH;
+
+  const roiMode = $("ball-roi-mode").value;
+  if (roiMode === "near_player") {
+    if (state.poseData && state.poseData.frames) {
+      const timeS = player.currentTime || 0;
+      const frames = state.poseData.frames.filter(f => f.near_player);
+      if (frames.length) {
+        let best = frames[0];
+        let minD = Math.abs(best.time_s - timeS);
+        for (const f of frames) {
+          const d = Math.abs(f.time_s - timeS);
+          if (d < minD) {
+            minD = d;
+            best = f;
+          }
+        }
+        const box = best.near_player.box;
+        const wNorm = Math.max(0.04, box.x2 - box.x1);
+        const hNorm = Math.max(0.08, box.y2 - box.y1);
+        const roiWNorm = wNorm * (1 + 2 * widthExp);
+        const expandDown = Math.max(0.25, heightExp * 0.8);
+        const roiHNorm = hNorm * (1 + heightExp + expandDown);
+        cropW = Math.round(roiWNorm * nativeW);
+        cropH = Math.round(roiHNorm * nativeH);
+      }
+    } else {
+      $("ball-roi-width-px").textContent = "0";
+      $("ball-roi-height-px").textContent = "0";
+      return;
+    }
+  }
+
+  const roundedCropW = Math.max(8, Math.round(cropW / 8) * 8);
+  const roundedCropH = Math.max(8, Math.round(cropH / 8) * 8);
+  
+  const infW = Math.max(8, Math.round((roundedCropW * infScale) / 8) * 8);
+  const infH = Math.max(8, Math.round((roundedCropH * infScale) / 8) * 8);
+
+  $("ball-roi-width-px").textContent = `${roundedCropW} (inf: ${infW})`;
+  $("ball-roi-height-px").textContent = `${roundedCropH} (inf: ${infH})`;
 }
 
 function ballDiagnosticCenterTime(currentTime) {
@@ -2587,6 +2706,17 @@ async function stopBallScan() {
   }
 }
 
+function prefixWithTimestamp(name) {
+  const now = new Date();
+  const YYYY = now.getFullYear();
+  const MM = String(now.getMonth() + 1).padStart(2, '0');
+  const DD = String(now.getDate()).padStart(2, '0');
+  const HH = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const ss = String(now.getSeconds()).padStart(2, '0');
+  return `${YYYY}${MM}${DD}_${HH}${mm}${ss}_${name}`;
+}
+
 async function saveBallScan() {
   const out = $("tracknet-summary");
   if (!state.analysisId || !state.ballScan) {
@@ -2599,28 +2729,23 @@ async function saveBallScan() {
     out.textContent = "Choosing folder to save locally...";
     const payload = { result: state.ballScan };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const defaultName = `${state.analysisId}.ball-scan.json`;
-    const savedLocally = await saveToFileSystem(blob, defaultName, "json");
+    const defaultName = prefixWithTimestamp(`${state.analysisId}.ball-scan.json`);
+    const savedLocally = await saveToFileSystem(blob, defaultName, "ball-scan-folder");
 
     if (savedLocally) {
-      const setAsDefault = window.confirm("Do you want to set this as the active data for this analysis? (It will be loaded automatically when you refresh this page)");
-      if (setAsDefault) {
-        out.textContent = "Updating server-side cache...";
-        const r = await fetch(`/hit-study/${state.analysisId}/ball-scan/save`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ job_id: state.ballScanJobId, result: state.ballScan }),
-        });
-        if (!r.ok) throw new Error(await r.text());
-        const data = await r.json();
-        if (data.saved_path) {
-          const parts = data.saved_path.split("/");
-          renderLoadedStatus("ball", parts[parts.length - 1]);
-        }
-        out.textContent = "Saved locally and set as default.";
-      } else {
-        out.textContent = "Saved locally.";
+      out.textContent = "Updating server-side cache...";
+      const r = await fetch(`/hit-study/${state.analysisId}/ball-scan/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: state.ballScanJobId, result: state.ballScan, filename: defaultName }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
+      if (data.saved_path) {
+        const parts = data.saved_path.split("/");
+        setLoadedSourceFile("ball", parts[parts.length - 1]);
       }
+      out.textContent = "Saved locally and set as default.";
     } else {
       out.textContent = "Local save canceled.";
     }
@@ -2639,7 +2764,7 @@ async function loadBallScan() {
       state.ballScan.source_file = filename;
     }
     renderBallScanSummary(sourceStr);
-    renderLoadedStatus("ball", filename);
+    setLoadedSourceFile("ball", filename);
     drawPoseOverlay();
   };
 
@@ -2819,29 +2944,23 @@ async function saveNearPlayerHits() {
   try {
     const payload = nearPlayerHitExportPayload();
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const defaultName = `${state.analysisId}.near-player-hit-labels.json`;
-    const savedLocally = await saveToFileSystem(blob, defaultName, "json");
+    const defaultName = prefixWithTimestamp(`${state.analysisId}.near-player-hit-labels.json`);
+    const savedLocally = await saveToFileSystem(blob, defaultName, "hit-labels-folder");
     
     if (savedLocally) {
-      const setAsDefault = window.confirm("Do you want to set this as the active marks for this analysis? (It will be loaded automatically when you refresh this page)");
-      if (setAsDefault) {
-        if (out) out.textContent = "Updating server-side cache...";
-        const r = await fetch(`/hit-study/${state.analysisId}/labels/save`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-        });
-        if (!r.ok) throw new Error(await r.text());
-        const data = await r.json();
-        if (data.saved_path) {
-          const parts = data.saved_path.split("/");
-          const filename = parts[parts.length - 1];
-          state.label_source_file = filename;
-          renderLoadedStatus("label", filename);
-        }
-        if (out) out.textContent = "Saved locally and set as default.";
-      } else {
-        if (out) out.textContent = `Saved ${payload.labels.length} marks locally.`;
+      if (out) out.textContent = "Updating server-side cache...";
+      const r = await fetch(`/hit-study/${state.analysisId}/labels/save?filename=${encodeURIComponent(defaultName)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
+      if (data.saved_path) {
+        const parts = data.saved_path.split("/");
+        const filename = parts[parts.length - 1];
+        setLoadedSourceFile("label", filename);
       }
+      if (out) out.textContent = "Saved locally and set as default.";
     } else {
       if (out) out.textContent = "Local save canceled.";
     }
@@ -2857,8 +2976,7 @@ async function loadNearPlayerHits() {
     replaceNearHitLabels(data.labels || []);
     const filename = data.source_file;
     if (filename) {
-      state.label_source_file = filename;
-      renderLoadedStatus("label", filename);
+      setLoadedSourceFile("label", filename);
     }
     if (out) out.textContent = `Loaded ${data.labels.length} marks from ${sourceStr}`;
   };
@@ -3059,12 +3177,13 @@ $("ball-roi-overlay-toggle").addEventListener("change", (e) => {
   state.ballRoiOverlayEnabled = !!e.target.checked;
   drawPoseOverlay();
 });
-for (const id of ["ball-roi-width", "ball-roi-height", "ball-diff-threshold", "ball-exclude-player-toggle", "ball-roi-mode"]) {
+for (const id of ["ball-roi-width", "ball-roi-height", "ball-inference-scale", "ball-diff-threshold", "ball-exclude-player-toggle", "ball-roi-mode"]) {
   const el = $(id);
   if (!el) continue;
   el.addEventListener("input", () => {
     state.ballDiagnostic = null;
     state.ballDiagnosticError = false;
+    updateRoiLabels();
     scheduleBallDiagnostic();
     drawPoseOverlay();
   });
@@ -3267,7 +3386,7 @@ async function savePoseScan() {
       result: state.poseData 
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const defaultName = `${state.analysisId}.pose-scan.json`; // use .json for local uncompressed if easier, or stay .gz
+    const defaultName = prefixWithTimestamp(`${state.analysisId}.pose-scan.json`); // use .json for local uncompressed if easier, or stay .gz
 
     // Actually, let's stick to the server's download if possible to keep it compressed
     let downloadBlob = blob;
@@ -3278,23 +3397,19 @@ async function savePoseScan() {
       console.warn("Could not fetch server-side compressed version for local save, using JSON.");
     }
 
-    const savedLocally = await saveToFileSystem(downloadBlob, defaultName.replace(".json", ".json.gz"), "gz");
+    const savedLocally = await saveToFileSystem(downloadBlob, defaultName.replace(".json", ".json.gz"), "pose-scan-folder");
 
     if (savedLocally) {
-      const setAsDefault = window.confirm("Do you want to set this as the active data for this analysis? (It will be loaded automatically when you refresh this page)");
-      if (setAsDefault) {
-        out.textContent = "Updating server-side cache...";
-        const r = await fetch(`/hit-study/${state.analysisId}/pose-scan/save`, { method: "POST" });
-        if (!r.ok) throw new Error(await r.text());
-        const data = await r.json();
-        if (data.saved_path) {
-          const parts = data.saved_path.split("/");
-          renderLoadedStatus("pose", parts[parts.length - 1]);
-        }
-        out.textContent = "Saved locally and set as default.";
-      } else {
-        out.textContent = "Saved locally.";
+      out.textContent = "Updating server-side cache...";
+      const finalName = defaultName.replace(".json", ".json.gz");
+      const r = await fetch(`/hit-study/${state.analysisId}/pose-scan/save?filename=${encodeURIComponent(finalName)}`, { method: "POST" });
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
+      if (data.saved_path) {
+        const parts = data.saved_path.split("/");
+        setLoadedSourceFile("pose", parts[parts.length - 1]);
       }
+      out.textContent = "Saved locally and set as default.";
     } else {
       out.textContent = "Local save canceled.";
     }
@@ -3310,7 +3425,7 @@ async function rememberPoseScanOnServer() {
     const data = await r.json();
     if (data.saved_path) {
       const parts = data.saved_path.split("/");
-      renderLoadedStatus("pose", parts[parts.length - 1]);
+      setLoadedSourceFile("pose", parts[parts.length - 1]);
     }
     return true;
   } catch (e) {
@@ -3449,7 +3564,7 @@ async function rememberAudioScanOnServer() {
     const data = await r.json();
     if (data.saved_path) {
       const parts = data.saved_path.split("/");
-      renderLoadedStatus("audio", parts[parts.length - 1]);
+      setLoadedSourceFile("audio", parts[parts.length - 1]);
     }
     return true;
   } catch (e) {
@@ -3470,7 +3585,7 @@ async function saveAudioScan() {
   try {
     // 1. Choose folder to save locally
     out.textContent = "Choosing folder to save locally...";
-    const defaultName = `${state.analysisId}.audio-scan.json`;
+    const defaultName = prefixWithTimestamp(`${state.analysisId}.audio-scan.json`);
     
     let downloadBlob;
     try {
@@ -3492,23 +3607,18 @@ async function saveAudioScan() {
       downloadBlob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     }
 
-    const savedLocally = await saveToFileSystem(downloadBlob, defaultName, "json");
+    const savedLocally = await saveToFileSystem(downloadBlob, defaultName, "audio-scan-folder");
     
     if (savedLocally) {
-      const setAsDefault = window.confirm("Do you want to set this as the active data for this analysis? (It will be loaded automatically when you refresh this page)");
-      if (setAsDefault) {
-        out.textContent = "Updating server-side cache...";
-        const r = await fetch(`/hit-study/${state.analysisId}/audio-scan/save`, { method: "POST" });
-        if (!r.ok) throw new Error(await r.text());
-        const data = await r.json();
-        if (data.saved_path) {
-          const parts = data.saved_path.split("/");
-          renderLoadedStatus("audio", parts[parts.length - 1]);
-        }
-        out.textContent = "Saved locally and set as default.";
-      } else {
-        out.textContent = "Saved locally.";
+      out.textContent = "Updating server-side cache...";
+      const r = await fetch(`/hit-study/${state.analysisId}/audio-scan/save?filename=${encodeURIComponent(defaultName)}`, { method: "POST" });
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
+      if (data.saved_path) {
+        const parts = data.saved_path.split("/");
+        setLoadedSourceFile("audio", parts[parts.length - 1]);
       }
+      out.textContent = "Saved locally and set as default.";
     } else {
       out.textContent = "Local save canceled.";
     }
@@ -3527,12 +3637,11 @@ async function loadAudioScan() {
     if (result) {
       const impacts = result.impacts || [];
       replaceImpactsInRange(result.range_start_s, result.range_end_s, impacts);
-      state.audio_source_file = filename;
       renderStrikeNav();
       renderStrikeDiagnostic();
       renderStrikeStats();
       drawTimeline();
-      renderLoadedStatus("audio", filename);
+      setLoadedSourceFile("audio", filename);
       out.textContent = `Loaded: ${impacts.length} impacts from ${sourceStr}`;
     } else {
       out.textContent = "Load returned no data.";

@@ -2,6 +2,8 @@ import unittest
 from fastapi.testclient import TestClient
 from app.main import app
 from app.routers.modular_scan import POSE_SCAN_JOBS, AUDIO_SCAN_JOBS
+import gzip
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -144,6 +146,66 @@ class TestModularScanRouter(unittest.TestCase):
             row = conn.execute("SELECT active_ball_scan_path FROM analyses WHERE id='an1'").fetchone()
             self.assertIsNotNone(row[0])
             self.assertTrue(row[0].endswith("an1.ball-scan.json"))
+
+    def test_save_ball_scan_uses_custom_filename(self):
+        filename = "20260514_120001_an1.ball-scan.json"
+        payload = {
+            "result": {
+                "candidates": [],
+                "candidate_count": 0,
+                "ball_detector": "tracknet"
+            },
+            "filename": filename,
+        }
+        response = self.client.post("/hit-study/an1/ball-scan/save", json=payload)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["saved_path"].endswith(f"ball_scans/{filename}"))
+
+        with database._connect() as conn:
+            row = conn.execute("SELECT active_ball_scan_path FROM analyses WHERE id='an1'").fetchone()
+            self.assertTrue(row[0].endswith(f"ball_scans/{filename}"))
+
+    def test_save_pose_scan_uses_custom_filename(self):
+        filename = "20260514_120000_an1.pose-scan.json.gz"
+        POSE_SCAN_JOBS["pose-save"] = {
+            "analysis_id": "an1",
+            "status": "done",
+            "result": {"frames": [{"time_s": 1.0}], "summary": {"sample_count": 1}},
+        }
+        response = self.client.post(f"/hit-study/an1/pose-scan/save?filename={filename}")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["saved_path"].endswith(f"yolo_pose_scans/{filename}"))
+
+        saved_path = Path(data["saved_path"])
+        with gzip.open(saved_path, "rt", encoding="utf-8") as f:
+            payload = json.load(f)
+        self.assertEqual(payload["result"]["summary"]["sample_count"], 1)
+
+        with database._connect() as conn:
+            row = conn.execute("SELECT active_pose_scan_path FROM analyses WHERE id='an1'").fetchone()
+            self.assertTrue(row[0].endswith(f"yolo_pose_scans/{filename}"))
+
+    def test_save_audio_scan_uses_custom_filename(self):
+        filename = "20260514_120002_an1.audio-scan.json"
+        AUDIO_SCAN_JOBS["audio-save"] = {
+            "analysis_id": "an1",
+            "status": "done",
+            "result": {"impacts": [{"time_s": 2.0}], "impact_count": 1},
+        }
+        response = self.client.post(f"/hit-study/an1/audio-scan/save?filename={filename}")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["saved_path"].endswith(f"audio_scans/{filename}"))
+
+        saved_path = Path(data["saved_path"])
+        payload = json.loads(saved_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["result"]["impact_count"], 1)
+
+        with database._connect() as conn:
+            row = conn.execute("SELECT active_audio_scan_path FROM analyses WHERE id='an1'").fetchone()
+            self.assertTrue(row[0].endswith(f"audio_scans/{filename}"))
 
 if __name__ == "__main__":
     unittest.main()
